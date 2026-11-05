@@ -47,6 +47,16 @@ pub fn line_char_len(rope: &Rope, line: usize) -> usize {
     end - start
 }
 
+/// Visual width of `line` in terminal cells, expanding tabs and wide glyphs.
+pub fn line_visual_width(rope: &Rope, line: usize, tab_width: usize) -> usize {
+    if line >= rope.len_lines() {
+        return 0;
+    }
+    let start = rope.line_to_char(line);
+    let (_, end) = line_bounds(rope, start);
+    visual_col(rope, end, tab_width)
+}
+
 /// Visual terminal column for a char offset, expanding tabs.
 pub fn visual_col(rope: &Rope, char_idx: usize, tab_width: usize) -> usize {
     let (start, end) = line_bounds(rope, char_idx);

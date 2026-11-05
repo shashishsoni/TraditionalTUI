@@ -35,6 +35,11 @@ pub enum Action {
     ReloadFile,
     ConnectAgent,
     OpenConfig,
+    OpenFolder,
+    BranchPicker,
+    ShowExplorer,
+    ShowSourceControl,
+    ShowDiff,
 }
 
 impl Action {
@@ -71,6 +76,11 @@ impl Action {
             ids::RELOAD_FILE => Self::ReloadFile,
             ids::CONNECT_AGENT => Self::ConnectAgent,
             ids::OPEN_CONFIG => Self::OpenConfig,
+            ids::OPEN_FOLDER => Self::OpenFolder,
+            ids::BRANCH_PICKER => Self::BranchPicker,
+            ids::SHOW_EXPLORER => Self::ShowExplorer,
+            ids::SHOW_SOURCE_CONTROL => Self::ShowSourceControl,
+            ids::SHOW_DIFF => Self::ShowDiff,
             _ => return None,
         })
     }

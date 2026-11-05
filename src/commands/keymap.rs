@@ -108,6 +108,19 @@ impl Keymap {
             ("alt-a", ids::CONNECT_AGENT),
             ("alt-c", ids::OPEN_CONFIG),
             ("alt-p", ids::COMMAND_PALETTE),
+            ("alt-o", ids::OPEN_FOLDER),
+            ("alt-b", ids::BRANCH_PICKER),
+            ("ctrl-alt-o", ids::OPEN_FOLDER),
+            ("ctrl-shift-e", ids::SHOW_EXPLORER),
+            ("ctrl-shift-f", ids::PROJECT_SEARCH),
+            ("alt-e", ids::SHOW_EXPLORER),
+            ("alt-g", ids::SHOW_SOURCE_CONTROL),
+            ("alt-f", ids::PROJECT_SEARCH),
+            ("alt-d", ids::SHOW_DIFF),
+            ("f5", ids::SHOW_EXPLORER),
+            ("f6", ids::SHOW_SOURCE_CONTROL),
+            ("f7", ids::PROJECT_SEARCH),
+            ("f8", ids::SHOW_DIFF),
         ];
         for (chord, command) in defaults {
             if let Some(chord) = Chord::parse(chord) {

@@ -40,6 +40,11 @@ pub mod ids {
     pub const RELOAD_FILE: &str = "file.reload";
     pub const CONNECT_AGENT: &str = "acp.connect";
     pub const OPEN_CONFIG: &str = "config.open";
+    pub const OPEN_FOLDER: &str = "workspace.open_folder";
+    pub const BRANCH_PICKER: &str = "git.branches";
+    pub const SHOW_EXPLORER: &str = "view.explorer";
+    pub const SHOW_SOURCE_CONTROL: &str = "view.source_control";
+    pub const SHOW_DIFF: &str = "ai.diff";
 }
 
 /// Declarative command description.
@@ -84,12 +89,7 @@ impl CommandRegistry {
                 "Navigation",
                 Some("ctrl-shift-p"),
             ),
-            spec(
-                PROJECT_SEARCH,
-                "Search in Project",
-                "Search",
-                Some("ctrl-shift-f"),
-            ),
+            spec(PROJECT_SEARCH, "Search in Project", "Search", Some("alt-f")),
             spec(BUFFER_SEARCH, "Search in Buffer", "Search", Some("ctrl-f")),
             spec(UNDO, "Undo", "Edit", Some("ctrl-z")),
             spec(REDO, "Redo", "Edit", Some("ctrl-y")),
@@ -112,6 +112,16 @@ impl CommandRegistry {
                 "Application",
                 Some("ctrl-o"),
             ),
+            spec(OPEN_FOLDER, "Open Folder", "Workspace", Some("alt-o")),
+            spec(BRANCH_PICKER, "Switch Git Branch", "Git", Some("alt-b")),
+            spec(SHOW_EXPLORER, "Show Explorer", "View", Some("f5")),
+            spec(
+                SHOW_SOURCE_CONTROL,
+                "Show Source Control",
+                "View",
+                Some("f6"),
+            ),
+            spec(SHOW_DIFF, "Show AI Edit Diff", "AI", Some("f8")),
         ];
         Self { specs }
     }

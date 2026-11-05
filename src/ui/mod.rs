@@ -1,5 +1,6 @@
 //! Terminal UI presentation layer.
 
+pub mod activity_bar;
 pub mod ai_panel;
 pub mod bottom_panel;
 pub mod editor_view;
@@ -7,7 +8,9 @@ pub mod explorer_view;
 pub mod layout;
 pub mod overlay;
 pub mod renderer;
+pub mod search_view;
 pub mod session;
+pub mod source_control_view;
 pub mod status_bar;
 pub mod theme;
 

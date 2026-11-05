@@ -19,6 +19,21 @@ impl App {
     pub(super) fn handle_editor_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if shift && !ctrl && !alt && matches!(self.state.mode, EditMode::Insert | EditMode::Normal)
+        {
+            match key.code {
+                KeyCode::Left => {
+                    self.scroll_horizontal(-4);
+                    return;
+                }
+                KeyCode::Right => {
+                    self.scroll_horizontal(4);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match self.state.mode {
             EditMode::Insert => self.handle_insert_key(key, ctrl, alt),
             EditMode::Normal => self.handle_normal_key(key, ctrl, alt),
@@ -141,6 +156,7 @@ impl App {
             KeyCode::Char('d') => self.state.pending = Some('d'),
             KeyCode::Char('y') => self.state.pending = Some('y'),
             KeyCode::Char('g') => self.state.pending = Some('g'),
+            KeyCode::Char('z') => self.state.pending = Some('z'),
             KeyCode::Char('p') => {
                 self.state.paste_register();
                 self.note_edit();
@@ -333,6 +349,21 @@ impl App {
             "help" => self.open_modal(ModalKind::Help),
             "trust" => self.grant_trust(),
             "git" => self.spawn_git_refresh(),
+            "branches" | "branch" => self.open_branch_picker(),
+            "folder" | "cd" => {
+                if argument.is_empty() {
+                    self.open_modal(ModalKind::OpenFolder);
+                } else {
+                    self.open_folder_from_query_command(argument);
+                }
+            }
+            "open" => {
+                if argument.is_empty() {
+                    self.open_modal(ModalKind::OpenFolder);
+                } else {
+                    self.open_folder_from_query_command(argument);
+                }
+            }
             "ai" => {
                 self.state.focus_ai();
                 if argument.is_empty() {
@@ -406,7 +437,9 @@ impl App {
             Action::Zoom => self.state.toggle_zoom(),
             Action::FileFinder => self.open_modal(ModalKind::FileFinder),
             Action::CommandPalette => self.open_modal(ModalKind::CommandPalette),
-            Action::ProjectSearch => self.open_modal(ModalKind::GlobalSearch),
+            Action::ProjectSearch => self
+                .state
+                .set_sidebar_view(crate::app::state::SidebarView::Search),
             Action::BufferSearch => self.open_modal(ModalKind::BufferSearch),
             Action::Undo => self.undo(),
             Action::Redo => self.redo(),
@@ -462,6 +495,21 @@ impl App {
             }
             Action::ConnectAgent => self.open_modal(ModalKind::AgentPicker),
             Action::OpenConfig => self.open_config(),
+            Action::OpenFolder => self.open_modal(ModalKind::OpenFolder),
+            Action::BranchPicker => self.open_branch_picker(),
+            Action::ShowExplorer => self
+                .state
+                .set_sidebar_view(crate::app::state::SidebarView::Explorer),
+            Action::ShowSourceControl => {
+                self.state
+                    .set_sidebar_view(crate::app::state::SidebarView::SourceControl);
+                let count = self.state.source_control_files().len();
+                self.state.source_control_selected = self
+                    .state
+                    .source_control_selected
+                    .min(count.saturating_sub(1));
+            }
+            Action::ShowDiff => self.show_diff(),
         }
     }
 
@@ -623,6 +671,10 @@ impl App {
                     Default::default()
                 };
                 self.state.acp = AcpManager::new(self.state.workspace.root(), &custom_agents);
+                self.lsp_generation = self.lsp_generation.wrapping_add(1);
+                self.acp_generation = self.acp_generation.wrapping_add(1);
+                self.lsp_busy = false;
+                self.lsp_request = None;
                 self.queue_lsp_current(LspSync::Open);
                 self.state
                     .set_status("Workspace trusted", MessageKind::Info);
@@ -717,6 +769,7 @@ impl App {
         let mut manager = std::mem::replace(&mut self.state.acp, placeholder);
         let agent_id = agent_id.to_string();
         let tx = self.event_tx.clone();
+        let generation = self.acp_generation;
         self.state
             .set_status(format!("Starting ACP agent {agent_id}…"), MessageKind::Info);
         tokio::spawn(async move {
@@ -730,7 +783,10 @@ impl App {
                             .await;
                     }
                     let _ = tx
-                        .send(super::event::AppEvent::AcpReady(Box::new(manager)))
+                        .send(super::event::AppEvent::AcpReady {
+                            manager: Box::new(manager),
+                            generation,
+                        })
                         .await;
                 }
                 Err(error) => {

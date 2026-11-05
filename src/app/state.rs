@@ -6,17 +6,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::acp::{AcpManager, PermissionPrompt};
-use crate::ai::AiCoordinator;
+use crate::ai::{AiCoordinator, DiffPreview};
 use crate::commands::{CommandRegistry, Keymap};
 use crate::config::Config;
 use crate::editor::{BufferSearch, Document};
 use crate::explorer::FileExplorer;
-use crate::git::GitRepository;
+use crate::git::{GitFileStatus, GitRepository};
 use crate::lsp::LspManager;
 use crate::providers::{
     AiProvider, CredentialStore, ProviderConfig, ProviderKind, provider_from_config,
 };
-use crate::search::FuzzyPicker;
+use crate::search::{FuzzyPicker, SearchMatch};
 use crate::terminal::TerminalManager;
 use crate::ui::layout::{LayoutState, compute};
 use crate::ui::theme::{ColorDepth, Theme, ThemeName};
@@ -30,6 +30,48 @@ pub enum FocusTarget {
     Editor,
     Bottom(BottomTab),
     Ai,
+}
+
+/// Left sidebar views, mirroring VS Code's activity bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SidebarView {
+    #[default]
+    Explorer,
+    SourceControl,
+    Search,
+}
+
+impl SidebarView {
+    pub const ALL: [SidebarView; 3] = [
+        SidebarView::Explorer,
+        SidebarView::SourceControl,
+        SidebarView::Search,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Explorer => "Explorer",
+            Self::SourceControl => "Source Control",
+            Self::Search => "Search",
+        }
+    }
+
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Explorer => "▤",
+            Self::SourceControl => "⑂",
+            Self::Search => "⌕",
+        }
+    }
+}
+
+/// Sidebar project-search state.
+#[derive(Debug, Clone, Default)]
+pub struct SidebarSearch {
+    pub query: String,
+    pub results: Vec<SearchMatch>,
+    pub selected: usize,
+    pub busy: bool,
 }
 
 /// Tabs inside the bottom panel.
@@ -106,6 +148,9 @@ pub enum ModalKind {
     BufferSearch,
     Rename,
     NewFile,
+    BranchPicker,
+    OpenFolder,
+    DiffPreview,
 }
 
 impl ModalKind {
@@ -122,6 +167,9 @@ impl ModalKind {
             Self::BufferSearch => "Search Buffer",
             Self::Rename => "Rename",
             Self::NewFile => "New File",
+            Self::BranchPicker => "Git Branch",
+            Self::OpenFolder => "Open Folder",
+            Self::DiffPreview => "AI Edit Preview",
         }
     }
 
@@ -129,14 +177,23 @@ impl ModalKind {
     pub fn has_input(self) -> bool {
         !matches!(
             self,
-            Self::Help | Self::PermissionPrompt | Self::ThemeSelector
+            Self::Help
+                | Self::PermissionPrompt
+                | Self::ThemeSelector
+                | Self::BranchPicker
+                | Self::DiffPreview
         )
     }
 
     pub fn has_list(self) -> bool {
         !matches!(
             self,
-            Self::AiPrompt | Self::BufferSearch | Self::Rename | Self::NewFile
+            Self::AiPrompt
+                | Self::BufferSearch
+                | Self::Rename
+                | Self::NewFile
+                | Self::OpenFolder
+                | Self::DiffPreview
         )
     }
 }
@@ -149,6 +206,8 @@ pub enum ModalAction {
     OpenMatch { path: PathBuf, line: u64 },
     Theme(ThemeName),
     Agent(String),
+    SwitchBranch(String),
+    OpenFolder,
 }
 
 /// One selectable modal row.
@@ -250,6 +309,9 @@ pub struct AppState {
     pub theme: Theme,
     pub mode: EditMode,
     pub focus: FocusTarget,
+    pub sidebar_view: SidebarView,
+    pub sidebar_search: SidebarSearch,
+    pub source_control_selected: usize,
     pub bottom_tab: BottomTab,
     pub active_modal: Option<ModalState>,
     pub status_message: Option<StatusMessage>,
@@ -261,6 +323,7 @@ pub struct AppState {
     pub lsp: LspManager,
     pub acp: AcpManager,
     pub ai: AiCoordinator,
+    pub diff_preview: Option<DiffPreview>,
     pub credentials: CredentialStore,
     pub output: VecDeque<String>,
     pub search: BufferSearch,
@@ -310,6 +373,82 @@ impl AppState {
         Ok(state)
     }
 
+    /// Replace the active project root without restarting the process.
+    pub fn switch_workspace(&mut self, root: &Path) -> Result<()> {
+        let root =
+            crate::platform::paths::canonicalize_clean(root).unwrap_or_else(|_| root.to_path_buf());
+        if !root.is_dir() {
+            return Err(TtuiError::Config(format!(
+                "not a directory: {}",
+                root.display()
+            )));
+        }
+
+        let config =
+            crate::config::load(&root).map_err(|error| TtuiError::Config(error.to_string()))?;
+        let mut workspace = Workspace::new(&root)?;
+        let _ = workspace.load_session();
+        if workspace.is_empty() {
+            workspace.scratch();
+        }
+        let explorer = FileExplorer::new(&root)?;
+        let trusted = workspace.is_trusted();
+        let lsp_settings = if config.lsp.enabled && trusted {
+            config.lsp.servers.clone()
+        } else {
+            Default::default()
+        };
+        let lsp = LspManager::from_settings(&lsp_settings);
+        let custom_agents = if config.acp.enabled && trusted {
+            config.acp.agents.clone()
+        } else {
+            Default::default()
+        };
+        let acp = AcpManager::new(&root, &custom_agents);
+        let mut notes = Vec::new();
+        let ai = build_ai(&config, &self.credentials, &mut notes);
+        let theme = Theme::from_name(ThemeName::parse(&config.ui.theme), self.theme.depth);
+        let layout = LayoutState::from_config(&config);
+        let keymap = Keymap::for_preset(config.keymap.preset);
+        let git = GitRepository::discover(&root);
+
+        if let Err(error) = self.workspace.save_session() {
+            tracing::warn!(%error, "failed to save previous workspace session");
+        }
+        self.terminal.close_all();
+        self.workspace = workspace;
+        self.explorer = explorer;
+        self.config = config;
+        self.lsp = lsp;
+        self.acp = acp;
+        self.ai = ai;
+        self.diff_preview = None;
+        self.theme = theme;
+        self.layout = layout;
+        self.keymap = keymap;
+        self.git = git;
+        self.file_index.clear();
+        self.fuzzy = FuzzyPicker::default();
+        self.sidebar_view = SidebarView::Explorer;
+        self.sidebar_search = SidebarSearch::default();
+        self.source_control_selected = 0;
+        self.active_modal = None;
+        self.search.clear();
+        self.pending = None;
+        self.command_buffer.clear();
+        self.mode = EditMode::Insert;
+        self.focus = FocusTarget::Editor;
+        self.terminal_passthrough = false;
+        self.quit_armed = false;
+        self.status_message = None;
+        self.output.push_back(format!(
+            "Opened workspace {}",
+            self.workspace.root().display()
+        ));
+        self.output.extend(notes);
+        Ok(())
+    }
+
     fn assemble(config: Config, workspace: Workspace, explorer: FileExplorer) -> Self {
         let trusted = workspace.is_trusted();
         let lsp_settings = if config.lsp.enabled && trusted {
@@ -349,6 +488,9 @@ impl AppState {
             theme,
             mode: EditMode::Insert,
             focus: FocusTarget::Editor,
+            sidebar_view: SidebarView::Explorer,
+            sidebar_search: SidebarSearch::default(),
+            source_control_selected: 0,
             bottom_tab: BottomTab::Terminal,
             active_modal: None,
             status_message: None,
@@ -360,6 +502,7 @@ impl AppState {
             lsp,
             acp,
             ai,
+            diff_preview: None,
             credentials,
             output,
             search: BufferSearch::default(),
@@ -469,8 +612,16 @@ impl AppState {
         );
         let height = regions.editor.height as usize;
         let offset = self.config.editor.scroll_off;
+        let tab_width = self.config.editor.tab_width.max(1);
         if let Some(document) = self.active_doc_mut() {
             document.ensure_cursor_visible(height.max(1), offset);
+            let digits = document.line_count().to_string().len() as u16;
+            let text_width = regions
+                .editor
+                .width
+                .saturating_sub(digits.saturating_add(2))
+                .max(1);
+            document.ensure_horizontal_visible(text_width, tab_width, offset.min(4));
         }
     }
 
@@ -590,6 +741,27 @@ impl AppState {
     pub fn focus_explorer(&mut self) {
         self.layout.left_visible = true;
         self.focus = FocusTarget::Explorer;
+    }
+
+    /// Switch the left activity-bar view and reveal the sidebar.
+    pub fn set_sidebar_view(&mut self, view: SidebarView) {
+        self.sidebar_view = view;
+        self.layout.left_visible = true;
+        self.focus = FocusTarget::Explorer;
+    }
+
+    /// Changed files from Git, sorted for stable selection.
+    pub fn source_control_files(&self) -> Vec<(PathBuf, GitFileStatus)> {
+        let Some(repository) = &self.git else {
+            return Vec::new();
+        };
+        let mut files: Vec<(PathBuf, GitFileStatus)> = repository
+            .statuses()
+            .iter()
+            .map(|(path, status)| (path.clone(), *status))
+            .collect();
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+        files
     }
 
     pub fn focus_editor(&mut self) {
@@ -789,5 +961,22 @@ mod tests {
         let mut state = AppState::for_testing(dir.path());
         state.layout.bottom_visible = false;
         assert_eq!(state.terminal_size(), (24, 80));
+    }
+
+    #[test]
+    fn switch_workspace_rebuilds_tree_and_editor() {
+        let first = tempfile::tempdir().expect("first");
+        let second = tempfile::tempdir().expect("second");
+        std::fs::write(second.path().join("new.rs"), "fn new() {}\n").expect("write");
+        let mut state = AppState::for_testing(first.path());
+        state.switch_workspace(second.path()).expect("switch");
+        assert_eq!(
+            state.workspace.root(),
+            crate::platform::paths::canonicalize_clean(second.path())
+                .expect("canonical")
+                .as_path()
+        );
+        assert_eq!(state.workspace.len(), 1);
+        assert_eq!(state.mode, EditMode::Insert);
     }
 }

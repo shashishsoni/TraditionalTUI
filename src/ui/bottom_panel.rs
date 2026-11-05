@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Tabs};
+use ratatui::widgets::{Block, Clear, Paragraph, Tabs};
 
 use crate::app::state::{AppState, BottomTab, FocusTarget, MessageKind};
 use crate::lsp::Severity;
@@ -14,6 +14,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
     let theme = &state.theme;
+    frame.render_widget(Clear, area);
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(theme.ui.panel_bg));
     let focused = matches!(state.focus, FocusTarget::Bottom(_));
     let block = Block::bordered().border_style(Style::default().fg(if focused {
         theme.ui.border_focused
@@ -118,6 +122,25 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             }
         }
     }
+}
+
+/// Hit-test a click on the bottom tab row.
+pub fn tab_at(area: Rect, x: u16, y: u16) -> Option<BottomTab> {
+    if y != area.y + 1 {
+        return None;
+    }
+    let mut start = area.x + 2;
+    for tab in BottomTab::ALL {
+        let width = tab.label().chars().count() as u16 + 2;
+        if x >= start && x < start + width {
+            return Some(tab);
+        }
+        start += width + 1;
+        if start >= area.right() {
+            break;
+        }
+    }
+    None
 }
 
 fn render_terminal(frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
@@ -251,5 +274,18 @@ pub fn message_color(kind: MessageKind, state: &AppState) -> ratatui::style::Col
         MessageKind::Info => state.theme.ui.success,
         MessageKind::Warning => state.theme.ui.warning,
         MessageKind::Error => state.theme.ui.error,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_hit_test_matches_rendered_titles() {
+        let area = Rect::new(10, 5, 80, 10);
+        assert_eq!(tab_at(area, 12, 6), Some(BottomTab::Terminal));
+        assert_eq!(tab_at(area, 23, 6), Some(BottomTab::Problems));
+        assert_eq!(tab_at(area, 12, 7), None);
     }
 }

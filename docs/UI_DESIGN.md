@@ -99,10 +99,14 @@ pub enum ModalKind {
    - `Ctrl+Space`: Open Command Palette; exit terminal passthrough to panel navigation.
    - `Ctrl+G`: Open the ACP agent picker.
    - `Ctrl+O`: Create/open the global `config.toml`.
+   - `Alt+O` / `Ctrl+Alt+O`: Open another project folder.
+   - `Alt+B`: Open the Git branch switcher.
+   - `Alt+E` / `Alt+G` / `Alt+F` (or `F5` / `F6` / `F7`): Switch the left activity-bar view to Explorer / Source Control / Search.
+   - `Alt+D` / `F8`: Open the current AI edit diff.
    - `Ctrl+Alt+B` / `<Space>a`: Toggle Right AI / ACP Assistant Panel.
    - `Ctrl+P` / `<Space>f`: Open Fuzzy File Finder.
    - `Ctrl+Shift+P` / `:`: Open Command Palette.
-   - `Ctrl+Shift+F` / `<Space>/`: Open Global Project Search & Replace.
+   - `Ctrl+Shift+F` / `Alt+F`: Open Search sidebar (project-wide search & replace).
    - `Alt+1..9`: Switch active editor tab.
 
 ---
@@ -118,9 +122,13 @@ pub enum ModalKind {
 - **`COMMAND` Mode (`:`)**: `:w` (save), `:q` (quit), `:wq`, `:vsplit`, `:hsplit`, `:theme <name>`, `:acp connect <agent>`.
 
 ### Mouse Support (Optional, Enabled by Default)
-- **Left Click**: Focus panel, switch tab, place editor cursor, expand/collapse Explorer folder, click `[Approve]` / `[Reject]` in ACP permission cards.
+- **Left Click**: Activity rail switches Explorer/Source Control/Search, bottom tabs switch panels, Explorer files open / folders toggle, Source Control files open, Search results open, the Git branch in the status bar opens the branch switcher, and ACP permission cards accept `[Approve]` / `[Reject]`.
 - **Click + Drag**: Visual text selection in Editor, or drag panel borders (`|`, `-`) to dynamically resize Left, Right, or Bottom splits.
-- **Scroll Wheel**: Smooth 3-line vertical scroll in Editor, Explorer, Terminal scrollback, or AI conversation history under the mouse pointer (even without changing active keyboard focus).
+- **Scroll Wheel**: Smooth 3-line vertical scroll in Editor, Explorer, Terminal scrollback, or AI conversation history under the mouse pointer. Shift+wheel or horizontal wheel scrolls the editor horizontally.
+
+### Sidebar Views & AI Diff Preview
+- The left activity rail hosts **Explorer**, **Source Control** (current branch plus changed files, with `b` branch switcher and `r` refresh), and **Search** (query field plus clickable project-wide results).
+- ACP and BYOK edit proposals are stored as structured diffs. The AI sidebar shows changed lines inline with red removed and green added markers; `d` or `Alt+D` opens the full scrollable diff overlay.
 
 ---
 

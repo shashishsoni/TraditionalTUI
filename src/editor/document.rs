@@ -16,7 +16,10 @@ use super::history::{EditKind, UndoHistory};
 use super::motion::{self, Motion};
 use super::search;
 use super::syntax::{HighlightState, language_id_for_path};
-use super::text::{line_bounds, line_text, next_grapheme_boundary, prev_grapheme_boundary};
+use super::text::{
+    line_bounds, line_text, line_visual_width, next_grapheme_boundary, prev_grapheme_boundary,
+    visual_col,
+};
 use crate::platform::fs::atomic_write;
 
 static NEXT_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
@@ -476,6 +479,35 @@ impl Document {
         self.top_line = self.top_line.min(max_top);
     }
 
+    /// Keep the primary cursor inside the horizontal viewport.
+    pub fn ensure_horizontal_visible(
+        &mut self,
+        viewport_width: u16,
+        tab_width: usize,
+        margin: usize,
+    ) {
+        let width = viewport_width.max(1) as usize;
+        let margin = margin.min(width.saturating_sub(1));
+        let head = self.cursors.primary().head.min(self.rope.len_chars());
+        let cursor_col = visual_col(&self.rope, head, tab_width.max(1));
+
+        if cursor_col < self.left_col.saturating_add(margin) {
+            self.left_col = cursor_col.saturating_sub(margin);
+        } else if cursor_col + margin >= self.left_col + width {
+            self.left_col = cursor_col + margin + 1 - width;
+        }
+    }
+
+    /// Scroll horizontally by `delta` visual cells on the cursor line.
+    pub fn scroll_horizontal(&mut self, delta: isize, tab_width: usize) {
+        let (line, _) = self.cursor_line_col();
+        let line_width = line_visual_width(&self.rope, line, tab_width.max(1));
+        let viewport_floor = self.left_col.saturating_add(1);
+        let max = line_width.max(viewport_floor);
+        let next = (self.left_col as isize + delta).clamp(0, max as isize);
+        self.left_col = next as usize;
+    }
+
     fn apply_edits(
         &mut self,
         edits: Vec<(usize, usize, String)>,
@@ -713,5 +745,20 @@ mod tests {
             .replace_ranges(&[(1, 99, "x".into())], EditKind::Replace)
             .expect_err("must fail");
         assert!(matches!(error, EditorError::InvalidRange { .. }));
+    }
+
+    #[test]
+    fn horizontal_visibility_follows_the_cursor() {
+        let mut document = Document::from_text("x".repeat(200));
+        document.set_cursor(150);
+        document.ensure_horizontal_visible(40, 4, 2);
+        let column = visual_col(&document.rope, 150, 4);
+        assert!(document.left_col <= column);
+        assert!(column < document.left_col + 40);
+
+        document.scroll_horizontal(-1_000, 4);
+        assert_eq!(document.left_col, 0);
+        document.scroll_horizontal(1_000, 4);
+        assert!(document.left_col > 0);
     }
 }

@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::acp::PermissionOptionKind;
+use crate::ai::DiffLineKind;
 use crate::app::state::{AppState, ModalKind, ModalState};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -62,6 +63,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ModalKind::GlobalSearch => " Enter search · ↑↓ select · Esc close",
         ModalKind::AiPrompt => " Enter send · Esc cancel",
         ModalKind::Rename | ModalKind::NewFile => " Enter confirm · Esc cancel",
+        ModalKind::OpenFolder => " Enter open · Esc cancel",
+        ModalKind::BranchPicker => " Enter switch · Alt+O open folder · Esc close",
+        ModalKind::DiffPreview => " ↑↓ scroll · Esc close",
         _ => " ↑↓ select · Enter confirm · Esc close",
     };
     frame.render_widget(
@@ -75,6 +79,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     match modal.kind {
         ModalKind::PermissionPrompt => render_permission(frame, body, modal, state),
         ModalKind::Help => render_list(frame, body, modal, state),
+        ModalKind::DiffPreview => render_diff(frame, body, modal, state),
         _ => {
             let mut y = body.y;
             if modal.kind.has_input() {
@@ -84,6 +89,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     ModalKind::AiPrompt => "ask ",
                     ModalKind::Rename => "rename ",
                     ModalKind::NewFile => "new file ",
+                    ModalKind::OpenFolder => "folder ",
                     _ => "> ",
                 };
                 let line = Line::from(vec![
@@ -207,6 +213,51 @@ fn render_permission(frame: &mut Frame, area: Rect, modal: &ModalState, state: &
             Span::styled(
                 option.name.clone(),
                 Style::default().fg(theme.ui.foreground),
+            ),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn render_diff(frame: &mut Frame, area: Rect, modal: &ModalState, state: &AppState) {
+    let theme = &state.theme;
+    let Some(diff) = &state.diff_preview else {
+        return;
+    };
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(
+            diff.path.display().to_string(),
+            Style::default()
+                .fg(theme.ui.foreground)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  +{} −{}", diff.added(), diff.removed()),
+            Style::default().fg(theme.ui.dim),
+        ),
+    ]));
+    let available = area.height.saturating_sub(1) as usize;
+    for line in diff.lines.iter().skip(modal.selected).take(available) {
+        let (prefix, color) = match line.kind {
+            DiffLineKind::Added => ("+ ", theme.ui.success),
+            DiffLineKind::Removed => ("- ", theme.ui.error),
+            DiffLineKind::Context => ("  ", theme.ui.dim),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                prefix.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                line.text.clone(),
+                Style::default()
+                    .fg(color)
+                    .bg(if line.kind == DiffLineKind::Context {
+                        theme.ui.panel_bg
+                    } else {
+                        theme.ui.selection
+                    }),
             ),
         ]));
     }

@@ -4,6 +4,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::widgets::Clear;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::app::state::{AppState, EditMode, FocusTarget};
@@ -16,6 +17,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
     let theme = &state.theme;
+    frame.render_widget(Clear, area);
     let buffer = frame.buffer_mut();
     buffer.set_style(area, Style::default().bg(theme.ui.background));
 
@@ -82,6 +84,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         for gutter_x in area.x..text_x {
             put(
                 buffer,
+                area,
                 gutter_x,
                 y,
                 " ",
@@ -102,16 +105,17 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             if x >= text_x {
                 break;
             }
-            put(buffer, x, y, &ch.to_string(), number_style);
+            put(buffer, area, x, y, &ch.to_string(), number_style);
             x += 1;
         }
         while x < text_x.saturating_sub(1) {
-            put(buffer, x, y, " ", number_style);
+            put(buffer, area, x, y, " ", number_style);
             x += 1;
         }
         if text_x > area.x {
             put(
                 buffer,
+                area,
                 text_x.saturating_sub(1),
                 y,
                 "│",
@@ -154,16 +158,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     if x >= area.right() {
                         break;
                     }
-                    put(buffer, x, y, " ", style);
+                    put(buffer, area, x, y, " ", style);
                     x += 1;
                 }
             } else {
                 if width as u16 >= 2 && x + 1 >= area.right() {
-                    put(buffer, x, y, "›", Style::default().fg(theme.ui.dim));
+                    put(buffer, area, x, y, "›", Style::default().fg(theme.ui.dim));
                     break;
                 }
                 let symbol = sanitize_grapheme(grapheme);
-                put(buffer, x, y, &symbol, style);
+                put(buffer, area, x, y, &symbol, style);
                 x = x.saturating_add(width as u16);
             }
             visual += width;
@@ -176,6 +180,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             if head == line_start + char_count {
                 put(
                     buffer,
+                    area,
                     x,
                     y,
                     " ",
@@ -191,16 +196,19 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_welcome(buffer: &mut Buffer, area: Rect, state: &AppState) {
     let theme = &state.theme;
-    let hints: [(&str, &str); 9] = [
+    let hints: [(&str, &str); 12] = [
         ("Ctrl+Space", "command palette"),
         ("Ctrl+P", "go to file"),
         ("Ctrl+T", "open terminal"),
-        ("Ctrl+Shift+F", "project search"),
+        ("Alt+F", "project search"),
         ("Ctrl+G", "connect ACP agent"),
         ("Ctrl+O", "open configuration"),
+        ("Alt+O", "open another folder"),
+        ("Alt+B", "switch git branch"),
+        ("F5/F6/F7", "explorer / git / search"),
+        ("F8", "review AI diff"),
         ("F1", "keymap help"),
         ("Esc", "normal mode"),
-        ("i", "insert mode"),
     ];
     let key_width = hints
         .iter()
@@ -265,6 +273,7 @@ fn render_welcome(buffer: &mut Buffer, area: Rect, state: &AppState) {
         for (index, ch) in key.chars().enumerate() {
             put(
                 buffer,
+                area,
                 start_x + index as u16,
                 y,
                 &ch.to_string(),
@@ -274,6 +283,7 @@ fn render_welcome(buffer: &mut Buffer, area: Rect, state: &AppState) {
         for (index, ch) in description.chars().enumerate() {
             put(
                 buffer,
+                area,
                 start_x + key_width as u16 + index as u16,
                 y,
                 &ch.to_string(),
@@ -287,7 +297,7 @@ fn draw_centered(buffer: &mut Buffer, area: Rect, y: u16, text: &str, style: Sty
     let width = text.chars().count() as u16;
     let x = area.x + area.width.saturating_sub(width) / 2;
     for (index, ch) in text.chars().enumerate() {
-        put(buffer, x + index as u16, y, &ch.to_string(), style);
+        put(buffer, area, x + index as u16, y, &ch.to_string(), style);
     }
 }
 
@@ -321,11 +331,21 @@ fn put_text(buffer: &mut Buffer, area: Rect, y: u16, text: &str, color: ratatui:
         if x >= area.right() {
             break;
         }
-        put(buffer, x, y, &ch.to_string(), Style::default().fg(color));
+        put(
+            buffer,
+            area,
+            x,
+            y,
+            &ch.to_string(),
+            Style::default().fg(color),
+        );
     }
 }
 
-fn put(buffer: &mut Buffer, x: u16, y: u16, symbol: &str, style: Style) {
+fn put(buffer: &mut Buffer, area: Rect, x: u16, y: u16, symbol: &str, style: Style) {
+    if !area.contains(ratatui::layout::Position::new(x, y)) {
+        return;
+    }
     if let Some(cell) = buffer.cell_mut((x, y)) {
         cell.set_symbol(symbol);
         cell.set_style(style);
@@ -338,6 +358,7 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
     let theme = &state.theme;
+    frame.render_widget(Clear, area);
     let buffer = frame.buffer_mut();
     buffer.set_style(area, Style::default().bg(theme.ui.status_bg));
     let mut x = area.x + 1;
@@ -361,7 +382,7 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
             if x >= area.right().saturating_sub(reserved) {
                 break;
             }
-            put(buffer, x, area.y, &ch.to_string(), style);
+            put(buffer, area, x, area.y, &ch.to_string(), style);
             x += 1;
         }
         if x >= area.right().saturating_sub(reserved) {
@@ -376,6 +397,7 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
         for (index, ch) in hint.chars().enumerate() {
             put(
                 buffer,
+                area,
                 hint_x + index as u16,
                 area.y,
                 &ch.to_string(),

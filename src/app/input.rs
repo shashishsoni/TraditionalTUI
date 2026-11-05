@@ -83,6 +83,14 @@ impl App {
             self.execute_action(Action::ToggleAi).await;
             return true;
         }
+        if ctrl && alt && is_char(code, 'o') {
+            self.execute_action(Action::OpenFolder).await;
+            return true;
+        }
+        if ctrl && shift && is_char(code, 'e') {
+            self.execute_action(Action::ShowExplorer).await;
+            return true;
+        }
         if ctrl && shift && is_char(code, 'p') {
             self.execute_action(Action::CommandPalette).await;
             return true;
@@ -200,6 +208,18 @@ impl App {
                         self.execute_action(Action::CommandPalette).await;
                         return true;
                     }
+                    'o' => {
+                        self.execute_action(Action::OpenFolder).await;
+                        return true;
+                    }
+                    'b' => {
+                        self.execute_action(Action::BranchPicker).await;
+                        return true;
+                    }
+                    'd' => {
+                        self.execute_action(Action::ShowDiff).await;
+                        return true;
+                    }
                     _ => {}
                 }
             }
@@ -219,6 +239,22 @@ impl App {
         }
         if code == KeyCode::F(4) {
             self.execute_action(Action::OpenConfig).await;
+            return true;
+        }
+        if code == KeyCode::F(5) {
+            self.execute_action(Action::ShowExplorer).await;
+            return true;
+        }
+        if code == KeyCode::F(6) {
+            self.execute_action(Action::ShowSourceControl).await;
+            return true;
+        }
+        if code == KeyCode::F(7) {
+            self.execute_action(Action::ProjectSearch).await;
+            return true;
+        }
+        if code == KeyCode::F(8) {
+            self.execute_action(Action::ShowDiff).await;
             return true;
         }
 
@@ -303,6 +339,13 @@ impl App {
                     self.state.set_status("Yanked line", MessageKind::Info);
                 }
             }
+            'z' => match key.code {
+                KeyCode::Char('h') => self.scroll_horizontal(-8),
+                KeyCode::Char('l') => self.scroll_horizontal(8),
+                KeyCode::Char('H') => self.scroll_horizontal(-16),
+                KeyCode::Char('L') => self.scroll_horizontal(16),
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -315,7 +358,9 @@ impl App {
                 self.state.toggle_ai();
                 self.state.focus_ai();
             }
-            KeyCode::Char('/') => self.open_modal(ModalKind::GlobalSearch),
+            KeyCode::Char('/') => self
+                .state
+                .set_sidebar_view(crate::app::state::SidebarView::Search),
             KeyCode::Char('c') => self.open_modal(ModalKind::CommandPalette),
             KeyCode::Char('z') => self.state.toggle_zoom(),
             KeyCode::Char('w') => self.execute_action(Action::Save).await,
@@ -327,9 +372,19 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.state.active_modal.is_some() {
+            return;
+        }
         let regions = compute(
             Rect::new(0, 0, self.state.viewport.0, self.state.viewport.1),
             &self.state.layout,
+        );
+        tracing::debug!(
+            kind = ?mouse.kind,
+            column = mouse.column,
+            row = mouse.row,
+            regions = ?regions,
+            "mouse event"
         );
         let position = Position::new(mouse.column, mouse.row);
 
@@ -337,20 +392,31 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(explorer) = regions.explorer {
                     if explorer.contains(position) {
-                        self.state.focus = FocusTarget::Explorer;
-                        let entries = self.state.explorer.visible_entries().len();
-                        let height = explorer.height.saturating_sub(2) as usize;
-                        if mouse.row > explorer.y && entries > 0 {
-                            let selected = self.state.explorer.selected_index();
-                            let start = if entries > height {
-                                selected.saturating_sub(height.saturating_sub(1))
-                            } else {
-                                0
-                            };
-                            let index = start + (mouse.row - explorer.y - 1) as usize;
-                            self.state.explorer.set_selected(index);
+                        let (activity, sidebar) = crate::ui::activity_bar::split(explorer);
+                        if activity.contains(position) {
+                            if let Some(view) =
+                                crate::ui::activity_bar::hit_test(activity, mouse.column, mouse.row)
+                            {
+                                tracing::debug!(?view, "activity bar click");
+                                self.state.set_sidebar_view(view);
+                            }
+                            return;
                         }
-                        return;
+                        if sidebar.contains(position) {
+                            self.state.focus = FocusTarget::Explorer;
+                            match self.state.sidebar_view {
+                                crate::app::state::SidebarView::Explorer => {
+                                    self.click_explorer(sidebar, mouse.column, mouse.row);
+                                }
+                                crate::app::state::SidebarView::SourceControl => {
+                                    self.click_source_control(sidebar, mouse.column, mouse.row);
+                                }
+                                crate::app::state::SidebarView::Search => {
+                                    self.click_sidebar_search(sidebar, mouse.column, mouse.row);
+                                }
+                            }
+                            return;
+                        }
                     }
                 }
                 if let Some(ai) = regions.ai {
@@ -359,10 +425,30 @@ impl App {
                         return;
                     }
                 }
+                if regions.status.contains(position) {
+                    let column = mouse.column.saturating_sub(regions.status.x);
+                    if crate::ui::status_bar::git_range(&self.state)
+                        .is_some_and(|(start, end)| column >= start && column < end)
+                    {
+                        self.open_branch_picker();
+                        return;
+                    }
+                }
                 if let Some(bottom) = regions.bottom {
                     if bottom.contains(position) {
-                        let tab = self.state.bottom_tab;
-                        self.state.focus_bottom(tab);
+                        if let Some(tab) =
+                            crate::ui::bottom_panel::tab_at(bottom, mouse.column, mouse.row)
+                        {
+                            tracing::debug!(?tab, "bottom tab click");
+                            self.state.bottom_tab = tab;
+                            self.state.focus = FocusTarget::Bottom(tab);
+                            self.state.terminal_passthrough =
+                                tab == BottomTab::Terminal && !self.state.terminal.is_empty();
+                        } else {
+                            tracing::debug!("bottom content click");
+                            let tab = self.state.bottom_tab;
+                            self.state.focus_bottom(tab);
+                        }
                         return;
                     }
                 }
@@ -372,11 +458,21 @@ impl App {
                 }
                 if regions.editor.contains(position) {
                     self.state.focus = FocusTarget::Editor;
-                    self.state.mode = EditMode::Normal;
+                    self.state.mode = EditMode::Insert;
                     self.place_cursor(regions.editor, mouse.column, mouse.row);
                 }
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if mouse.modifiers.contains(KeyModifiers::SHIFT)
+                    && regions.editor.contains(position)
+                {
+                    self.scroll_horizontal(if mouse.kind == MouseEventKind::ScrollUp {
+                        -4
+                    } else {
+                        4
+                    });
+                    return;
+                }
                 let delta = if mouse.kind == MouseEventKind::ScrollUp {
                     -3isize
                 } else {
@@ -403,6 +499,12 @@ impl App {
                         }
                     }
                 }
+            }
+            MouseEventKind::ScrollLeft if regions.editor.contains(position) => {
+                self.scroll_horizontal(-4);
+            }
+            MouseEventKind::ScrollRight if regions.editor.contains(position) => {
+                self.scroll_horizontal(4);
             }
             _ => {}
         }
@@ -454,6 +556,14 @@ impl App {
     }
 
     pub(super) fn handle_explorer_key(&mut self, key: KeyEvent) {
+        match self.state.sidebar_view {
+            crate::app::state::SidebarView::Explorer => self.handle_explorer_view_key(key),
+            crate::app::state::SidebarView::SourceControl => self.handle_source_control_key(key),
+            crate::app::state::SidebarView::Search => self.handle_sidebar_search_key(key),
+        }
+    }
+
+    fn handle_explorer_view_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => self.state.explorer.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.state.explorer.select_previous(),
@@ -490,6 +600,154 @@ impl App {
             }
             KeyCode::Char('q') | KeyCode::Esc => self.state.focus_editor(),
             _ => {}
+        }
+    }
+
+    fn handle_source_control_key(&mut self, key: KeyEvent) {
+        let count = self.state.source_control_files().len();
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if count > 0 {
+                    self.state.source_control_selected =
+                        (self.state.source_control_selected + 1).min(count - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.state.source_control_selected =
+                    self.state.source_control_selected.saturating_sub(1);
+            }
+            KeyCode::Enter | KeyCode::Char('o') => self.open_source_control_file(),
+            KeyCode::Char('b') => self.open_branch_picker(),
+            KeyCode::Char('r') => self.spawn_git_refresh(),
+            KeyCode::Char('q') | KeyCode::Esc => self.state.focus_editor(),
+            _ => {}
+        }
+    }
+
+    fn handle_sidebar_search_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Esc => self.state.focus_editor(),
+            KeyCode::Up => {
+                self.state.sidebar_search.selected =
+                    self.state.sidebar_search.selected.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                let count = self.state.sidebar_search.results.len();
+                if count > 0 {
+                    self.state.sidebar_search.selected =
+                        (self.state.sidebar_search.selected + 1).min(count - 1);
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(result) = self
+                    .state
+                    .sidebar_search
+                    .results
+                    .get(self.state.sidebar_search.selected)
+                    .cloned()
+                {
+                    self.open_search_match(result.path, result.line);
+                } else {
+                    self.start_sidebar_search();
+                }
+            }
+            KeyCode::Backspace => {
+                self.state.sidebar_search.query.pop();
+                self.state.sidebar_search.results.clear();
+                self.state.sidebar_search.selected = 0;
+                self.state.sidebar_search.busy = false;
+            }
+            KeyCode::Char(ch) if !ctrl && !alt => {
+                self.state.sidebar_search.query.push(ch);
+                self.state.sidebar_search.results.clear();
+                self.state.sidebar_search.selected = 0;
+                self.state.sidebar_search.busy = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn open_source_control_file(&mut self) {
+        let files = self.state.source_control_files();
+        let Some((path, _)) = files.get(self.state.source_control_selected) else {
+            return;
+        };
+        let path = path.clone();
+        if self.state.open_file(&path).is_ok() {
+            self.queue_lsp_current(LspSync::Open);
+        }
+    }
+
+    fn open_search_match(&mut self, path: std::path::PathBuf, line: u64) {
+        if self.state.open_file(&path).is_ok() {
+            if let Some(document) = self.state.active_doc_mut() {
+                document.goto_line(line.saturating_sub(1) as usize);
+            }
+            self.state.ensure_cursor_visible();
+            self.queue_lsp_current(LspSync::Open);
+        }
+    }
+
+    fn click_explorer(&mut self, area: Rect, _column: u16, row: u16) {
+        let entries = self.state.explorer.visible_entries().len();
+        let inner_height = area.height.saturating_sub(2);
+        let list_height = inner_height.saturating_sub(u16::from(inner_height >= 6)) as usize;
+        if row <= area.y || entries == 0 {
+            return;
+        }
+        let selected = self.state.explorer.selected_index();
+        let start = if entries > list_height {
+            selected.saturating_sub(list_height.saturating_sub(1))
+        } else {
+            0
+        };
+        let index = start + (row - area.y - 1) as usize;
+        if index >= entries {
+            return;
+        }
+        self.state.explorer.set_selected(index);
+        if let Some(entry) = self.state.explorer.selected_entry() {
+            if entry.is_dir {
+                let _ = self.state.explorer.toggle(&entry.path);
+            } else if self.state.open_file(&entry.path).is_ok() {
+                self.state.mode = EditMode::Insert;
+                self.queue_lsp_current(LspSync::Open);
+            }
+        }
+    }
+
+    fn click_source_control(&mut self, area: Rect, _column: u16, row: u16) {
+        if crate::ui::source_control_view::is_branch_row(area, row) {
+            self.open_branch_picker();
+            return;
+        }
+        if let Some(index) = crate::ui::source_control_view::file_index_at(
+            area,
+            row,
+            self.state.source_control_selected,
+            self.state.source_control_files().len(),
+        ) {
+            let files = self.state.source_control_files();
+            if index < files.len() {
+                self.state.source_control_selected = index;
+                self.open_source_control_file();
+            }
+        }
+    }
+
+    fn click_sidebar_search(&mut self, area: Rect, _column: u16, row: u16) {
+        if let Some(index) = crate::ui::search_view::result_index_at(
+            area,
+            row,
+            self.state.sidebar_search.selected,
+            self.state.sidebar_search.results.len(),
+        ) {
+            if let Some(result) = self.state.sidebar_search.results.get(index).cloned() {
+                self.state.sidebar_search.selected = index;
+                self.open_search_match(result.path, result.line);
+            }
         }
     }
 
@@ -555,6 +813,7 @@ impl App {
         match key.code {
             KeyCode::Char('i') | KeyCode::Enter => self.open_modal(ModalKind::AiPrompt),
             KeyCode::Char('a') => self.open_modal(ModalKind::AgentPicker),
+            KeyCode::Char('d') => self.show_diff(),
             KeyCode::Char('c') => {
                 self.state.ai.clear();
                 self.state
@@ -584,6 +843,13 @@ impl App {
             document.apply_motion(motion, extend, tab_width);
         }
         self.state.ensure_cursor_visible();
+    }
+
+    pub(super) fn scroll_horizontal(&mut self, delta: isize) {
+        let tab_width = self.state.config.editor.tab_width.max(1);
+        if let Some(document) = self.state.active_doc_mut() {
+            document.scroll_horizontal(delta, tab_width);
+        }
     }
 
     pub(super) fn add_cursor_vertical(&mut self, delta: isize) {

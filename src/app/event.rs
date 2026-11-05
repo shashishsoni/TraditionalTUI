@@ -10,18 +10,37 @@ use crate::search::SearchMatch;
 
 /// Message from a background subsystem.
 pub enum AppEvent {
-    FileIndex(Vec<PathBuf>),
+    FileIndex {
+        root: PathBuf,
+        files: Vec<PathBuf>,
+    },
     GitRefreshed {
+        root: PathBuf,
         branch: Option<String>,
         statuses: HashMap<PathBuf, GitFileStatus>,
     },
-    GitFailed(String),
+    GitFailed {
+        root: PathBuf,
+        error: String,
+    },
     SearchResults {
         query: String,
         results: Vec<SearchMatch>,
     },
     SearchFailed(String),
+    Notice(String),
     Error(String),
-    AcpReady(Box<AcpManager>),
-    LspReady(Box<LspManager>),
+    Branches {
+        branches: Vec<String>,
+        current: Option<String>,
+    },
+    BranchesFailed(String),
+    AcpReady {
+        manager: Box<AcpManager>,
+        generation: u64,
+    },
+    LspReady {
+        manager: Box<LspManager>,
+        generation: u64,
+    },
 }

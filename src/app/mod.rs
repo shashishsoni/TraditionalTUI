@@ -11,8 +11,7 @@ pub mod state;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, EventStream, KeyEventKind};
-use futures::StreamExt;
+use crossterm::event::{Event, KeyEventKind};
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -49,6 +48,8 @@ pub struct App {
     lsp_dirty: bool,
     lsp_dirty_at: Option<Instant>,
     lsp_busy: bool,
+    lsp_generation: u64,
+    acp_generation: u64,
     dirty: bool,
 }
 
@@ -66,6 +67,8 @@ impl App {
             lsp_dirty: false,
             lsp_dirty_at: None,
             lsp_busy: false,
+            lsp_generation: 0,
+            acp_generation: 0,
             dirty: true,
         };
         app.queue_lsp_current(LspSync::Open);
@@ -74,9 +77,24 @@ impl App {
 
     /// Run until the user quits.
     pub async fn run(mut self, terminal: &mut TuiTerminal) -> crate::Result<()> {
-        let mut events = EventStream::new();
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel();
+        std::thread::Builder::new()
+            .name("ttui-input".into())
+            .spawn(move || {
+                while let Ok(event) = crossterm::event::read() {
+                    if input_tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            })?;
+
         let mut tick = tokio::time::interval(Duration::from_millis(33));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        if let Ok(size) = terminal.size() {
+            self.state.viewport = (size.width.max(1), size.height.max(1));
+            let (rows, cols) = self.state.terminal_size();
+            self.state.terminal.resize_active(rows, cols);
+        }
         self.start_background_tasks();
 
         while !self.state.should_quit {
@@ -89,18 +107,12 @@ impl App {
             tokio::select! {
                 biased;
 
-                event = events.next() => {
-                    match event {
-                        Some(Ok(event)) => {
-                            self.handle_terminal_event(event).await;
-                            self.dirty = true;
-                        }
-                        Some(Err(error)) => {
-                            tracing::warn!(%error, "terminal event stream failed");
-                            break;
-                        }
-                        None => break,
+                Some(event) = input_rx.recv() => {
+                    self.handle_terminal_event(event).await;
+                    while let Ok(next) = input_rx.try_recv() {
+                        self.handle_terminal_event(next).await;
                     }
+                    self.dirty = true;
                 }
 
                 Some(event) = self.event_rx.recv() => {
@@ -125,6 +137,7 @@ impl App {
     }
 
     async fn handle_terminal_event(&mut self, event: Event) {
+        tracing::debug!(event = ?event, "raw terminal event");
         match event {
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {

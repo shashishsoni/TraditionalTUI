@@ -4,9 +4,9 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 
-use crate::ai::{AiState, ChatRole};
+use crate::ai::{AiState, ChatRole, DiffLineKind};
 use crate::app::state::{AppState, FocusTarget};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -14,6 +14,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
     let theme = &state.theme;
+    frame.render_widget(Clear, area);
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(theme.ui.panel_bg));
     let focused = state.focus == FocusTarget::Ai;
     let block = Block::bordered()
         .border_style(Style::default().fg(if focused {
@@ -96,11 +100,59 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
     if focused {
         lines.push(Line::from(Span::styled(
-            " i ask · a agents · x cancel · c clear",
+            " i ask · a agents · d diff · x cancel · c clear",
             Style::default().fg(theme.ui.dim),
         )));
     }
     lines.push(Line::from(""));
+
+    if let Some(diff) = &state.diff_preview {
+        lines.push(Line::from(vec![
+            Span::styled(
+                " Edit preview ",
+                Style::default()
+                    .fg(theme.ui.warning)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("+{} −{}", diff.added(), diff.removed()),
+                Style::default().fg(theme.ui.dim),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!(" {}", diff.path.display()),
+            Style::default().fg(theme.ui.dim),
+        )));
+        let changed: Vec<_> = diff
+            .lines
+            .iter()
+            .filter(|line| line.kind != DiffLineKind::Context)
+            .collect();
+        for line in changed.iter().take(6) {
+            let (prefix, color) = match line.kind {
+                DiffLineKind::Added => ("+ ", theme.ui.success),
+                DiffLineKind::Removed => ("- ", theme.ui.error),
+                DiffLineKind::Context => ("  ", theme.ui.dim),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    prefix.to_string(),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    line.text.clone(),
+                    Style::default().fg(color).bg(theme.ui.selection),
+                ),
+            ]));
+        }
+        if changed.len() > 6 {
+            lines.push(Line::from(Span::styled(
+                " … d opens full diff",
+                Style::default().fg(theme.ui.dim),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
 
     let thread = state.ai.thread();
     if thread.is_empty() {
@@ -193,7 +245,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let height = content.height as usize;
     let start = lines.len().saturating_sub(height);
-    let visible: Vec<Line> = lines.into_iter().skip(start).collect();
+    let visible: Vec<Line> = if state.diff_preview.is_some() {
+        lines.into_iter().take(height).collect()
+    } else {
+        lines.into_iter().skip(start).collect()
+    };
     frame.render_widget(Paragraph::new(visible), content);
 }
 

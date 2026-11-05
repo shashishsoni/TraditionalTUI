@@ -1,4 +1,4 @@
-//! One-line status bar.
+//! One-line status bar with clickable git/branch segment.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -19,13 +19,43 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .fg(theme.ui.status_fg);
     frame.buffer_mut().set_style(area, background);
 
+    let (mut spans, _) = compose(state);
+    if let Some(document) = state.active_doc() {
+        let (line, column) = document.status_position();
+        let scroll = if document.left_col > 0 {
+            format!("↔{}  ", document.left_col)
+        } else {
+            String::new()
+        };
+        let right = format!(
+            " {}  {}  {scroll}Ln {line}, Col {column} ",
+            document.encoding.label(),
+            document.line_ending.label()
+        );
+        let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+        let padding = (area.width as usize).saturating_sub(used + right.chars().count());
+        if padding > 0 {
+            spans.push(Span::raw(" ".repeat(padding)));
+        }
+        spans.push(Span::styled(right, Style::default().fg(theme.ui.dim)));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(background), area);
+}
+
+/// Character range of the git segment inside the status bar, if visible.
+pub fn git_range(state: &AppState) -> Option<(u16, u16)> {
+    compose(state).1
+}
+
+fn compose(state: &AppState) -> (Vec<Span<'static>>, Option<(u16, u16)>) {
+    let theme = &state.theme;
     let mode_color = match state.mode {
         EditMode::Normal => theme.ui.accent,
         EditMode::Insert => theme.ui.success,
         EditMode::Visual => theme.ui.warning,
         EditMode::Command => theme.ui.hint,
     };
-    let mut spans = vec![Span::styled(
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(
         format!(" {} ", state.mode.label()),
         Style::default()
             .fg(theme.ui.cursor_fg)
@@ -33,6 +63,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             .add_modifier(Modifier::BOLD),
     )];
     spans.push(Span::styled("│", Style::default().fg(theme.ui.border)));
+    let mut git_range = None;
 
     if state.mode == EditMode::Command {
         spans.push(Span::styled(
@@ -64,14 +95,20 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(theme.ui.dim),
         ));
 
-        if let Some(git) = &state.git {
-            if let Some(branch) = git.branch() {
-                spans.push(Span::styled(
-                    format!("│ ⑂ {branch} "),
-                    Style::default().fg(theme.ui.hint),
-                ));
-            }
-        }
+        let start = spans
+            .iter()
+            .map(|span| span.content.chars().count() as u16)
+            .sum::<u16>();
+        let (git_text, git_color) = match &state.git {
+            Some(git) => match git.branch() {
+                Some(branch) => (format!("│ ⑂ {branch} "), theme.ui.hint),
+                None => ("│ ⑂ detached ".to_string(), theme.ui.warning),
+            },
+            None => ("│ ◇ open folder ".to_string(), theme.ui.dim),
+        };
+        let end = start + git_text.chars().count() as u16;
+        spans.push(Span::styled(git_text, Style::default().fg(git_color)));
+        git_range = Some((start, end));
 
         let (errors, warnings) = state.lsp.diagnostics().counts();
         spans.push(Span::styled(
@@ -118,32 +155,36 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ));
     }
 
-    if let Some(document) = state.active_doc() {
-        let (line, column) = document.status_position();
-        let right = format!(
-            " {}  {}  Ln {line}, Col {column} ",
-            document.encoding.label(),
-            document.line_ending.label()
-        );
-        let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-        let padding = (area.width as usize).saturating_sub(used + right.chars().count());
-        if padding > 0 {
-            spans.push(Span::raw(" ".repeat(padding)));
-        }
-        spans.push(Span::styled(right, Style::default().fg(theme.ui.dim)));
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(spans)).style(background), area);
+    (spans, git_range)
 }
 
 fn focus_label(state: &AppState) -> &'static str {
     match state.focus {
-        FocusTarget::Explorer => "EXPLORER",
+        FocusTarget::Explorer => match state.sidebar_view {
+            crate::app::state::SidebarView::Explorer => "EXPLORER",
+            crate::app::state::SidebarView::SourceControl => "SOURCE CONTROL",
+            crate::app::state::SidebarView::Search => "SEARCH",
+        },
         FocusTarget::Editor => "EDITOR",
         FocusTarget::Bottom(crate::app::state::BottomTab::Terminal) => "TERMINAL",
         FocusTarget::Bottom(crate::app::state::BottomTab::Problems) => "PROBLEMS",
         FocusTarget::Bottom(crate::app::state::BottomTab::Output) => "OUTPUT",
         FocusTarget::Bottom(crate::app::state::BottomTab::AcpLogs) => "ACP LOGS",
         FocusTarget::Ai => "AI",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_composition_exposes_git_range() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = AppState::for_testing(dir.path());
+        let (spans, range) = compose(&state);
+        assert!(!spans.is_empty());
+        let (start, end) = range.expect("git segment");
+        assert!(end > start);
     }
 }

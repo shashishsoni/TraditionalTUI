@@ -107,6 +107,28 @@ impl GitRepository {
         self.statuses = statuses;
     }
 
+    /// List local branch names.
+    pub fn list_branches(&self) -> Result<Vec<String>, GitError> {
+        let output = run_git(
+            &self.root,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )?;
+        let mut branches: Vec<String> = output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect();
+        branches.sort();
+        Ok(branches)
+    }
+
+    /// Check out an existing local branch.
+    pub fn switch_branch(&self, branch: &str) -> Result<(), GitError> {
+        run_git(&self.root, &["checkout", "--no-guess", branch])?;
+        Ok(())
+    }
+
     /// Refresh branch and file status information.
     pub fn refresh(&mut self) -> Result<(), GitError> {
         let branch = run_git(&self.root, &["rev-parse", "--abbrev-ref", "HEAD"])?;

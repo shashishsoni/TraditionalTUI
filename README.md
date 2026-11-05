@@ -8,11 +8,11 @@
 
 - **100% Terminal-Native**: Runs inside any modern terminal emulator on **Linux**, **macOS** (`Terminal.app`, `iTerm2`, Ghostty, WezTerm), and **Windows** (`Windows Terminal`, PowerShell, CMD). Zero Electron, browser, or GUI dependencies.
 - **VS Code-Inspired 5-Zone Workbench**:
-  - **Left Sidebar**: Project File Explorer with Git status decorations.
-  - **Center Workbench**: Multi-tab, split-pane code editor powered by `ropey::Rope` UTF-8 B-trees, multi-cursor editing, Vim/Helix modal & VS Code keymap presets, and incremental `tree-sitter` syntax highlighting.
+  - **Left Activity Bar**: Explorer, Source Control (branch and changed files), and project-wide Search views.
+  - **Center Workbench**: Multi-tab code editor powered by `ropey::Rope` UTF-8 B-trees, multi-cursor editing, Vim/Helix modal & VS Code keymap presets, horizontal scrolling, and incremental syntax highlighting.
   - **Bottom Panel**: Multiplexed PTY terminal (`portable-pty` + `vt100`), workspace `Problems` (diagnostics), `LSP` logs, and `ACP Trace` inspector.
-  - **Right Sidebar**: Optional AI Assistant & ACP Coding Agent timeline with inline permission approval cards.
-  - **Command Palette & Fuzzy Pickers**: Instant command execution (`Ctrl+Shift+P` / `:`), lock-free fuzzy file navigation (`Ctrl+P` via `nucleo`), and streaming ripgrep project search (`Ctrl+Shift+F`).
+  - **Right Sidebar**: Optional AI Assistant & ACP Coding Agent timeline with inline permission cards and red/green edit diffs.
+  - **Command Palette & Fuzzy Pickers**: Instant command execution (`Ctrl+Space` / `:`), lock-free fuzzy file navigation (`Ctrl+P` via `nucleo`), and streaming ripgrep project search (`Alt+F`).
 - **First-Class Agent Client Protocol (ACP)**:
   - Built against the official `agent-client-protocol` specification over stdio JSON-RPC 2.0.
   - Supports native ACP agents (`opencode acp`, `command-code-acp`, `cursor-agent acp`, `gemini --acp`, `goose acp`) and official ACP adapters (`claude-agent-acp`, `codex-acp`).
@@ -74,9 +74,23 @@ cargo bench --no-run
 | `Ctrl+T` | Open integrated terminal (`Ctrl+Space` returns to panel navigation) |
 | `Ctrl+G` | Connect an installed ACP agent (Command Code, OpenCode, Gemini, …) |
 | `Ctrl+O` | Create/open `~/.config/ttui/config.toml` |
-| `Ctrl+Shift+F` | Project-wide search |
+| `Alt+O` | Open another project folder |
+| `Alt+B` | Switch Git branch (or click the branch in the status bar) |
+| `Alt+E` / `Alt+G` / `Alt+F` | Explorer / Source Control / Search sidebar |
+| `F5` / `F6` / `F7` | Explorer / Source Control / Search sidebar |
+| `Alt+D` / `F8` | Review the current AI edit diff |
 | `Ctrl+Q` | Quit (twice when buffers are dirty) |
 | `F1` | Keymap help |
+
+The left activity rail switches between Explorer, Source Control and Search. Source Control
+lists the current branch and every changed file; Search runs in the sidebar with clickable
+results. ACP edit proposals appear inline in the AI sidebar with red removed and green added
+lines; `Alt+D` opens the full diff.
+
+Click any file in the explorer to open it, click the bottom tabs to switch between
+Terminal, Problems, Output and ACP Logs, and click the branch name in the status bar to
+open the branch switcher. The branch switcher also contains **Open Folder…** for loading
+any directory as a new project without restarting.
 
 `Ctrl+O` writes a commented starter config on first use. Configure the theme, terminal
 shell, BYOK providers, LSP servers and ACP agents there. Workspace-local

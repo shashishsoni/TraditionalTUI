@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::app::state::{AppState, FocusTarget};
 use crate::git::GitFileStatus;
@@ -14,6 +14,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
     let theme = &state.theme;
+    frame.render_widget(Clear, area);
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(theme.ui.panel_bg));
     let focused = state.focus == FocusTarget::Explorer;
     let border_style = Style::default().fg(if focused {
         theme.ui.border_focused
@@ -34,7 +38,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{} ", truncate(&state.workspace_name(), 12)),
+                format!("{} ", truncate(&state.workspace_name(), 10)),
                 Style::default().fg(theme.ui.dim),
             ),
         ]));
@@ -73,7 +77,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     Style::default().fg(theme.ui.foreground),
                 )),
                 Line::from(Span::styled(
-                    " press a to create one",
+                    " a creates a file",
                     Style::default().fg(theme.ui.dim),
                 )),
             ]),

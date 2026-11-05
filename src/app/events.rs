@@ -29,12 +29,13 @@ impl App {
         let sender = self.event_tx.clone();
         std::mem::drop(tokio::task::spawn_blocking(move || {
             let files = crate::search::index_files(&root, max);
-            let _ = sender.blocking_send(AppEvent::FileIndex(files));
+            let _ = sender.blocking_send(AppEvent::FileIndex { root, files });
         }));
     }
 
     pub(super) fn spawn_git_refresh(&self) {
         let root = self.state.workspace.root().to_path_buf();
+        let event_root = root.clone();
         let sender = self.event_tx.clone();
         std::mem::drop(tokio::task::spawn_blocking(
             move || match GitRepository::discover(&root) {
@@ -42,14 +43,22 @@ impl App {
                     Ok(()) => {
                         let statuses = repository.statuses().clone();
                         let branch = repository.branch().map(str::to_string);
-                        let _ = sender.blocking_send(AppEvent::GitRefreshed { branch, statuses });
+                        let _ = sender.blocking_send(AppEvent::GitRefreshed {
+                            root: event_root,
+                            branch,
+                            statuses,
+                        });
                     }
                     Err(error) => {
-                        let _ = sender.blocking_send(AppEvent::GitFailed(error.to_string()));
+                        let _ = sender.blocking_send(AppEvent::GitFailed {
+                            root: event_root,
+                            error: error.to_string(),
+                        });
                     }
                 },
                 None => {
                     let _ = sender.blocking_send(AppEvent::GitRefreshed {
+                        root: event_root,
                         branch: None,
                         statuses: Default::default(),
                     });
@@ -60,7 +69,10 @@ impl App {
 
     pub(super) async fn handle_app_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::FileIndex(files) => {
+            AppEvent::FileIndex { root, files } => {
+                if root.as_path() != self.state.workspace.root() {
+                    return;
+                }
                 let root = self.state.workspace.root().to_path_buf();
                 let labels = files
                     .iter()
@@ -80,7 +92,14 @@ impl App {
                     }
                 }
             }
-            AppEvent::GitRefreshed { branch, statuses } => {
+            AppEvent::GitRefreshed {
+                root,
+                branch,
+                statuses,
+            } => {
+                if root.as_path() != self.state.workspace.root() {
+                    return;
+                }
                 match self.state.git.as_mut() {
                     Some(repository) => repository.apply(branch, statuses.clone()),
                     None => {
@@ -93,12 +112,27 @@ impl App {
                     }
                 }
                 self.state.explorer.set_git_statuses(statuses);
+                let count = self.state.source_control_files().len();
+                self.state.source_control_selected = self
+                    .state
+                    .source_control_selected
+                    .min(count.saturating_sub(1));
             }
-            AppEvent::GitFailed(error) => {
+            AppEvent::GitFailed { root, error } => {
+                if root.as_path() != self.state.workspace.root() {
+                    return;
+                }
                 self.state.push_output(format!("git: {error}"));
                 self.state.set_status(error, MessageKind::Warning);
             }
             AppEvent::SearchResults { query, results } => {
+                if self.state.sidebar_search.busy
+                    && self.state.sidebar_search.query.trim() == query.trim()
+                {
+                    self.state.sidebar_search.results = results.clone();
+                    self.state.sidebar_search.selected = 0;
+                    self.state.sidebar_search.busy = false;
+                }
                 let root = self.state.workspace.root().to_path_buf();
                 let entries: Vec<ModalEntry> = results
                     .into_iter()
@@ -122,17 +156,64 @@ impl App {
                 }
             }
             AppEvent::SearchFailed(error) => {
+                self.state.sidebar_search.busy = false;
                 if let Some(modal) = self.state.active_modal.as_mut() {
                     modal.busy = false;
                 }
                 self.state
                     .set_status(format!("Search failed: {error}"), MessageKind::Error);
             }
+            AppEvent::Notice(text) => self.state.set_status(text, MessageKind::Info),
+            AppEvent::Branches { branches, current } => {
+                if let Some(modal) = self.state.active_modal.as_mut() {
+                    if modal.kind == ModalKind::BranchPicker {
+                        modal
+                            .entries
+                            .retain(|entry| matches!(entry.action, ModalAction::OpenFolder));
+                        if branches.is_empty() {
+                            modal.entries.push(ModalEntry::new(
+                                "No local branches",
+                                "open a git project or initialize one",
+                                ModalAction::OpenFolder,
+                            ));
+                        }
+                        for branch in branches {
+                            let is_current = current.as_deref() == Some(branch.as_str());
+                            modal.entries.push(ModalEntry::new(
+                                if is_current {
+                                    format!("● {branch}")
+                                } else {
+                                    format!("  {branch}")
+                                },
+                                if is_current { "current" } else { "local" },
+                                ModalAction::SwitchBranch(branch),
+                            ));
+                        }
+                        modal.selected = 0;
+                        modal.busy = false;
+                    }
+                }
+            }
+            AppEvent::BranchesFailed(error) => {
+                if let Some(modal) = self.state.active_modal.as_mut() {
+                    if modal.kind == ModalKind::BranchPicker {
+                        modal.busy = false;
+                    }
+                }
+                self.state
+                    .set_status(format!("Branch list failed: {error}"), MessageKind::Error);
+            }
             AppEvent::Error(text) => {
                 self.state.push_output(text.clone());
                 self.state.set_status(text, MessageKind::Error);
             }
-            AppEvent::AcpReady(manager) => {
+            AppEvent::AcpReady {
+                manager,
+                generation,
+            } => {
+                if generation != self.acp_generation {
+                    return;
+                }
                 self.state.acp = *manager;
                 self.state.focus_ai();
                 let message = match self.state.acp.session_id() {
@@ -147,7 +228,13 @@ impl App {
                 };
                 self.state.set_status(message, MessageKind::Info);
             }
-            AppEvent::LspReady(manager) => {
+            AppEvent::LspReady {
+                manager,
+                generation,
+            } => {
+                if generation != self.lsp_generation {
+                    return;
+                }
                 self.state.lsp = *manager;
                 self.lsp_busy = false;
             }
@@ -288,6 +375,7 @@ impl App {
         let manager = std::mem::replace(&mut self.state.lsp, LspManager::new(configs));
         let root = self.state.workspace.root().to_path_buf();
         let sender = self.event_tx.clone();
+        let generation = self.lsp_generation;
         self.lsp_busy = true;
 
         tokio::spawn(async move {
@@ -308,7 +396,12 @@ impl App {
             if let Err(error) = result {
                 let _ = sender.send(AppEvent::Error(format!("LSP: {error}"))).await;
             }
-            let _ = sender.send(AppEvent::LspReady(Box::new(manager))).await;
+            let _ = sender
+                .send(AppEvent::LspReady {
+                    manager: Box::new(manager),
+                    generation,
+                })
+                .await;
         });
     }
 
@@ -413,6 +506,9 @@ impl App {
                 }
             }
             _ => {}
+        }
+        if let Some(diff) = crate::ai::DiffPreview::from_tool_call(update) {
+            self.state.diff_preview = Some(diff);
         }
     }
 
