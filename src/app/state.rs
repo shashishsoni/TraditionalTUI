@@ -72,6 +72,39 @@ pub struct SidebarSearch {
     pub results: Vec<SearchMatch>,
     pub selected: usize,
     pub busy: bool,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub regex: bool,
+    pub max_results: usize,
+    pub searching: bool,
+}
+
+impl SidebarSearch {
+    pub fn new() -> Self {
+        Self {
+            query: String::new(),
+            results: Vec::new(),
+            selected: 0,
+            busy: false,
+            case_sensitive: false,
+            whole_word: false,
+            regex: true,
+            max_results: 200,
+            searching: false,
+        }
+    }
+
+    pub fn toggle_case(&mut self) {
+        self.case_sensitive = !self.case_sensitive;
+    }
+
+    pub fn toggle_word(&mut self) {
+        self.whole_word = !self.whole_word;
+    }
+
+    pub fn toggle_regex(&mut self) {
+        self.regex = !self.regex;
+    }
 }
 
 /// Tabs inside the bottom panel.
@@ -430,7 +463,7 @@ impl AppState {
         self.file_index.clear();
         self.fuzzy = FuzzyPicker::default();
         self.sidebar_view = SidebarView::Explorer;
-        self.sidebar_search = SidebarSearch::default();
+        self.sidebar_search = SidebarSearch::new();
         self.source_control_selected = 0;
         self.active_modal = None;
         self.search.clear();
@@ -489,7 +522,7 @@ impl AppState {
             mode: EditMode::Insert,
             focus: FocusTarget::Editor,
             sidebar_view: SidebarView::Explorer,
-            sidebar_search: SidebarSearch::default(),
+            sidebar_search: SidebarSearch::new(),
             source_control_selected: 0,
             bottom_tab: BottomTab::Terminal,
             active_modal: None,
@@ -751,21 +784,61 @@ impl AppState {
     }
 
     /// Changed files from Git, sorted for stable selection.
-    pub fn source_control_files(&self) -> Vec<(PathBuf, GitFileStatus)> {
+    /// `files` is `(path, status, badge)` where the badge distinguishes
+    /// staged (`S`), unstaged (`M`), and fully-staged (`✓`) states.
+    pub fn source_control_badges(&self) -> std::collections::HashMap<PathBuf, String> {
         let Some(repository) = &self.git else {
-            return Vec::new();
+            return std::collections::HashMap::new();
         };
-        let mut files: Vec<(PathBuf, GitFileStatus)> = repository
-            .statuses()
-            .iter()
-            .map(|(path, status)| (path.clone(), *status))
-            .collect();
-        files.sort_by(|left, right| left.0.cmp(&right.0));
-        files
+        repository
+            .staging_summary()
+            .into_iter()
+            .map(|(path, staging)| (path, staging.badge().to_string()))
+            .collect()
+    }
+
+    /// Stage or unstage the selected Source Control file and trigger a refresh.
+    pub fn toggle_staged(&self) -> std::result::Result<PathBuf, crate::git::GitError> {
+        let files = self.source_control_files();
+        let (path, _, badge) = files
+            .get(self.source_control_selected)
+            .ok_or_else(|| crate::git::GitError::InvalidPath(String::new()))?;
+        let repository = self.git.as_ref().ok_or_else(|| {
+            crate::git::GitError::InvalidPath(self.workspace.root().display().to_string())
+        })?;
+        if badge == "S" || badge == "M+" {
+            repository.unstage_path(path)?;
+        } else {
+            repository.stage_path(path)?;
+        }
+        Ok(path.clone())
     }
 
     pub fn focus_editor(&mut self) {
         self.focus = FocusTarget::Editor;
+    }
+
+    /// Changed files from Git, sorted for stable selection.
+    /// `files` is `(path, status, badge)` where the badge distinguishes
+    /// unstaged (`M`), staged (`S`), and mixed (`M+`) states.
+    pub fn source_control_files(&self) -> Vec<(PathBuf, GitFileStatus, String)> {
+        let Some(repository) = &self.git else {
+            return Vec::new();
+        };
+        let badges = repository.staging_summary();
+        let mut files: Vec<(PathBuf, GitFileStatus, String)> = repository
+            .statuses()
+            .iter()
+            .map(|(path, status)| {
+                let badge = badges
+                    .get(path)
+                    .map(|staging| staging.badge().to_string())
+                    .unwrap_or_else(|| status.badge().to_string());
+                (path.clone(), *status, badge)
+            })
+            .collect();
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+        files
     }
 
     pub fn focus_bottom(&mut self, tab: BottomTab) {

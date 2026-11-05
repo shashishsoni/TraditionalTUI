@@ -40,10 +40,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.focus == FocusTarget::Editor;
     let line_count = document.line_count().max(1);
     let digits = line_count.to_string().len() as u16;
-    let gutter_width = digits + 2;
+    let gutter_width = digits + 3;
     let text_x = area.x + gutter_width;
     let tab_width = state.config.editor.tab_width.max(1);
     let cursor_line = document.cursor_line_col().0;
+    let git_marks = git_mark_map(&document.git_diff.marks, &state.theme);
 
     let mut line = document.top_line.min(line_count.saturating_sub(1));
     let mut y = area.y;
@@ -108,9 +109,23 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             put(buffer, area, x, y, &ch.to_string(), number_style);
             x += 1;
         }
-        while x < text_x.saturating_sub(1) {
+        while x < text_x.saturating_sub(2) {
             put(buffer, area, x, y, " ", number_style);
             x += 1;
+        }
+        if text_x > area.x + 1 {
+            if let Some(marker) = git_marks.get(&line) {
+                put(
+                    buffer,
+                    area,
+                    text_x.saturating_sub(2),
+                    y,
+                    marker.0,
+                    Style::default().fg(marker.1),
+                );
+            } else {
+                put(buffer, area, text_x.saturating_sub(2), y, " ", number_style);
+            }
         }
         if text_x > area.x {
             put(
@@ -352,6 +367,24 @@ fn put(buffer: &mut Buffer, area: Rect, x: u16, y: u16, symbol: &str, style: Sty
     }
 }
 
+fn git_mark_map(
+    marks: &[(usize, crate::editor::GutterMark)],
+    theme: &crate::ui::theme::Theme,
+) -> std::collections::HashMap<usize, (&'static str, ratatui::style::Color)> {
+    use crate::editor::GutterMark;
+    let mut map = std::collections::HashMap::new();
+    for (line, kind) in marks {
+        let (glyph, color) = match kind {
+            GutterMark::Added => ("+", theme.ui.success),
+            GutterMark::Modified => ("~", theme.ui.warning),
+            GutterMark::Deleted => ("_", theme.ui.error),
+            GutterMark::Conflict => ("!", theme.ui.error),
+        };
+        map.insert(*line, (glyph, color));
+    }
+    map
+}
+
 /// Render the tab bar across the top of the editor zone.
 pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
     if area.width == 0 || area.height == 0 {
@@ -363,12 +396,14 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
     buffer.set_style(area, Style::default().bg(theme.ui.status_bg));
     let mut x = area.x + 1;
     let active = state.workspace.active_index();
-    let reserved = 26u16;
+    let hint = "F1 help · Ctrl+Space commands ";
+    let reserved = hint.chars().count() as u16;
+    let limit = area.right().saturating_sub(reserved);
 
     for (index, document) in state.workspace.documents().iter().enumerate() {
-        let dirty = if document.dirty { " *" } else { "" };
-        let label = format!(" {}{dirty} ", document.display_name());
-        let style = if Some(index) == active {
+        let dirty = if document.dirty { " ●" } else { "" };
+        let label = format!(" {}{dirty} ✕ ", document.display_name());
+        let mut style = if Some(index) == active {
             Style::default()
                 .fg(theme.ui.cursor_fg)
                 .bg(theme.ui.accent)
@@ -378,19 +413,35 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(theme.ui.tab_inactive)
                 .bg(theme.ui.status_bg)
         };
+        if Some(index) == active && state.focus == FocusTarget::Editor {
+            style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        let mut wrote = false;
         for ch in label.chars() {
-            if x >= area.right().saturating_sub(reserved) {
+            if x >= limit {
                 break;
             }
             put(buffer, area, x, area.y, &ch.to_string(), style);
             x += 1;
+            wrote = true;
         }
-        if x >= area.right().saturating_sub(reserved) {
+        if x >= limit {
             break;
         }
+        if !wrote {
+            break;
+        }
+        put(
+            buffer,
+            area,
+            x,
+            area.y,
+            "│",
+            Style::default().fg(theme.ui.border),
+        );
+        x += 1;
     }
 
-    let hint = "F1 help · Ctrl+Space commands ";
     let hint_width = hint.chars().count() as u16;
     if area.width > hint_width + 4 {
         let hint_x = area.right().saturating_sub(hint_width);
@@ -405,4 +456,30 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
             );
         }
     }
+}
+
+/// Hit-test a click inside the tab bar. Returns `(tab_index, close_clicked)`.
+pub fn tab_hit_at(area: Rect, state: &AppState, x: u16, y: u16) -> Option<(usize, bool)> {
+    if area.height == 0 || y != area.y || x < area.x + 1 {
+        return None;
+    }
+    let hint = "F1 help · Ctrl+Space commands ";
+    let limit = area.right().saturating_sub(hint.chars().count() as u16);
+    let mut cursor = area.x + 1;
+    for (index, document) in state.workspace.documents().iter().enumerate() {
+        let dirty = if document.dirty { " ●" } else { "" };
+        let label = format!(" {}{dirty} ✕ ", document.display_name());
+        let width = label.chars().count() as u16;
+        if x >= cursor && x < cursor + width {
+            if x + 1 >= limit {
+                return None;
+            }
+            return Some((index, x + 2 >= cursor + width));
+        }
+        cursor += width + 1;
+        if cursor >= limit {
+            break;
+        }
+    }
+    None
 }

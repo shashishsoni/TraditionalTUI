@@ -23,6 +23,11 @@ pub enum AppEvent {
         root: PathBuf,
         error: String,
     },
+    GitGutter {
+        root: PathBuf,
+        version: u64,
+        marks: Vec<(usize, crate::git::LineChange)>,
+    },
     SearchResults {
         query: String,
         results: Vec<SearchMatch>,

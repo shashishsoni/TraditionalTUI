@@ -94,11 +94,13 @@ pub enum GutterMark {
     Added,
     Modified,
     Deleted,
+    Conflict,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GutterDiff {
     pub marks: Vec<(usize, GutterMark)>,
+    pub version: u64,
 }
 
 /// One open text buffer.

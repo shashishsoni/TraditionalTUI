@@ -46,8 +46,19 @@ pub enum GitError {
     #[error("git is not installed or not on PATH")]
     NotInstalled,
 
+    #[error("path is outside the repository: {0}")]
+    InvalidPath(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Line-level change category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LineChange {
+    Added,
+    Modified,
+    Removed,
 }
 
 /// A discovered repository.
@@ -126,6 +137,203 @@ impl GitRepository {
     /// Check out an existing local branch.
     pub fn switch_branch(&self, branch: &str) -> Result<(), GitError> {
         run_git(&self.root, &["checkout", "--no-guess", branch])?;
+        Ok(())
+    }
+
+    /// Current branch short name including `HEAD` for detached states.
+    pub fn branch_short(&self) -> String {
+        self.branch
+            .as_deref()
+            .filter(|branch| !branch.is_empty() && *branch != "HEAD")
+            .unwrap_or("HEAD")
+            .to_string()
+    }
+
+    /// Whether this looks like a detached HEAD state.
+    pub fn is_detached(&self) -> bool {
+        self.branch.as_deref().is_none_or(|branch| branch == "HEAD")
+    }
+
+    /// Read a file from `HEAD`, returning `Ok(None)` when untracked or when
+    /// git cannot produce the content. `git show` prints nothing for an empty
+    /// HEAD file, so zero-byte output is `None`, not `Some("")`.
+    pub fn head_content(&self, relative: &Path) -> Result<Option<String>, GitError> {
+        let escaped = relative.to_string_lossy().replace('\\', "/");
+        match run_git_bytes(&self.root, &["show", &format!("HEAD:{escaped}")]) {
+            Ok(output) if output.is_empty() => Ok(None),
+            Ok(output) => Ok(Some(String::from_utf8_lossy(&output).into_owned())),
+            Err(GitError::Command(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Read the staged (index) version of a file.
+    pub fn staged_content(&self, relative: &Path) -> Result<Option<String>, GitError> {
+        let escaped = relative.to_string_lossy().replace('\\', "/");
+        match run_git_bytes(&self.root, &["show", &format!(":{escaped}")]) {
+            Ok(output) if output.is_empty() => Ok(None),
+            Ok(output) => Ok(Some(String::from_utf8_lossy(&output).into_owned())),
+            Err(GitError::Command(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Read a file's worktree bytes.
+    pub fn worktree_content(path: &Path) -> std::io::Result<Option<String>> {
+        match std::fs::read(path) {
+            Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Untracked-file check driven by `git status`, so the gutter can render
+    /// "every line added" even when `git show :path` reports nothing.
+    fn is_untracked(&self, absolute: &Path) -> bool {
+        self.statuses
+            .get(absolute)
+            .is_some_and(|status| *status == GitFileStatus::Untracked)
+    }
+
+    /// Per-line change marks: unstaged (worktree vs index) plus staged
+    /// differences (index vs HEAD). Paths outside the repository root are
+    /// treated as unknown content rather than an error.
+    pub fn working_tree_changes(&self, path: &Path) -> Vec<(usize, LineChange)> {
+        let escaped = crate::platform::paths::relative_display(&self.root, path);
+        let relative: PathBuf = if escaped == path.to_string_lossy().replace('\\', "/") {
+            // Outside the root (or already absolute): try stripping the root.
+            match path.strip_prefix(&self.root) {
+                Ok(stripped) => stripped.to_path_buf(),
+                Err(_) => return Vec::new(),
+            }
+        } else {
+            PathBuf::from(escaped)
+        };
+
+        let head_file = self.head_content(&relative).ok().flatten();
+        let staged_file = self.staged_content(&relative).ok().flatten();
+        let worktree_file = Self::worktree_content(path).ok().flatten();
+
+        let mut marks: Vec<(usize, LineChange)> = Vec::new();
+
+        // Untracked files never exist in HEAD or the index: every worktree
+        // line renders as an addition, so edits are visible on first keystroke.
+        if self.is_untracked(path) {
+            if let Some(work) = worktree_file.as_deref() {
+                marks.extend((0..lines_of(work).len()).map(|line| (line, LineChange::Added)));
+            }
+            marks.sort_by_key(|(line, _)| *line);
+            marks.dedup();
+            return marks;
+        }
+
+        if let (Some(head), Some(staged)) = (head_file.as_deref(), staged_file.as_deref()) {
+            if head != staged {
+                marks.extend(diff_marks(&lines_of(head), &lines_of(staged), true));
+            }
+        } else if let Some(staged) = staged_file.as_deref() {
+            // New file that is fully staged: every line is an addition.
+            if !staged.is_empty() {
+                marks.extend((0..lines_of(staged).len()).map(|line| (line, LineChange::Added)));
+            }
+        }
+        if let (Some(base), Some(work)) = (
+            staged_file.as_deref().or(head_file.as_deref()),
+            worktree_file.as_deref(),
+        ) {
+            if base != work {
+                marks.extend(diff_marks(&lines_of(base), &lines_of(work), false));
+            }
+        }
+        marks.sort_by_key(|(line, _)| *line);
+        marks.dedup();
+        marks
+    }
+
+    /// Per-file staged vs unstaged line counts, keyed by absolute path.
+    /// `git show :path` can be noisy for exotic paths; failures produce an
+    /// empty staging record rather than an error.
+    pub fn staging_summary(&self) -> std::collections::HashMap<PathBuf, Staging> {
+        let mut summary = std::collections::HashMap::new();
+        let mut rel_paths: Vec<PathBuf> = self.statuses.keys().cloned().collect();
+        rel_paths.sort();
+        for absolute in rel_paths {
+            let relative = self
+                .relative_path(&absolute)
+                .unwrap_or_else(|_| absolute.clone());
+            let head = self.head_content(&relative).ok().flatten();
+            let staged = self.staged_content(&relative).ok().flatten();
+            let worktree = Self::worktree_content(&absolute).ok().flatten();
+
+            let has_staged = staged.as_deref().is_some_and(|text| {
+                !text.is_empty() || head.as_deref().is_some_and(|h| !h.is_empty())
+            });
+            let mut record = Staging::default();
+
+            match (head.as_deref(), staged.as_deref()) {
+                (Some(head_text), Some(staged_text)) if head_text != staged_text => {
+                    record.staged_additions = lines_of(staged_text).len();
+                }
+                (None, Some(staged_text)) if has_staged => {
+                    record.staged_additions = lines_of(staged_text).len();
+                }
+                (Some(_), Some(_)) => {}
+                _ => {}
+            }
+
+            if let (Some(base), Some(work)) =
+                (staged.as_deref().or(head.as_deref()), worktree.as_deref())
+            {
+                if base != work {
+                    record.unstaged_additions = lines_of(work).len();
+                }
+            }
+
+            // Untracked files: everything is unstaged.
+            if self
+                .statuses
+                .get(&absolute)
+                .is_some_and(|status| *status == GitFileStatus::Untracked)
+            {
+                record.unstaged_additions = worktree.map(|text| lines_of(&text).len()).unwrap_or(0);
+            }
+
+            summary.insert(absolute, record);
+        }
+        summary
+    }
+
+    /// Workspace-root-relative path for git object lookups.
+    fn relative_path(&self, absolute: &Path) -> Result<PathBuf, GitError> {
+        absolute
+            .strip_prefix(&self.root)
+            .map(Path::to_path_buf)
+            .map_err(|_| GitError::InvalidPath(absolute.display().to_string()))
+    }
+
+    /// Stage a file (`git add`).
+    pub fn stage_path(&self, path: &Path) -> Result<(), GitError> {
+        let relative = self.relative_path(path)?;
+        let escaped = relative.to_string_lossy().replace('\\', "/");
+        run_git(&self.root, &["add", "--", &escaped])?;
+        Ok(())
+    }
+
+    /// Unstage a file but keep worktree edits (`git restore --staged`).
+    pub fn unstage_path(&self, path: &Path) -> Result<(), GitError> {
+        let relative = self.relative_path(path)?;
+        let escaped = relative.to_string_lossy().replace('\\', "/");
+        run_git(&self.root, &["restore", "--staged", "--", &escaped])?;
+        Ok(())
+    }
+
+    /// Discard all worktree changes to a file (`git checkout -- <path>`).
+    /// Used by tests to restore fixtures; the UI keeps edits lossless.
+    #[allow(dead_code)]
+    pub fn discard_path(&self, path: &Path) -> Result<(), GitError> {
+        let relative = self.relative_path(path)?;
+        let escaped = relative.to_string_lossy().replace('\\', "/");
+        run_git(&self.root, &["checkout", "--", &escaped])?;
         Ok(())
     }
 
@@ -220,6 +428,61 @@ fn run_git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
     Ok(output.stdout)
 }
 
+fn lines_of(text: &str) -> Vec<String> {
+    text.lines().map(str::to_string).collect()
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn relative_path(root: &Path, absolute: &Path) -> Result<PathBuf, GitError> {
+    absolute
+        .strip_prefix(root)
+        .map(Path::to_path_buf)
+        .map_err(|_| GitError::InvalidPath(absolute.display().to_string()))
+}
+
+/// Map imara-diff ranges to gutter line numbers. Staged ranges are reported
+/// as `Added` (index additions); unstaged changes keep Added/Modified and
+/// deletions map to the removed line anchor.
+fn diff_marks(before: &[String], after: &[String], staged: bool) -> Vec<(usize, LineChange)> {
+    use imara_diff::intern::InternedInput;
+    use imara_diff::sources::lines;
+    use imara_diff::{Algorithm, diff};
+
+    let before_join = before.join("\n");
+    let after_join = after.join("\n");
+    let input = InternedInput::new(lines(&before_join), lines(&after_join));
+    let mut marks = Vec::new();
+    diff(
+        Algorithm::Histogram,
+        &input,
+        |before_range: std::ops::Range<u32>, after_range: std::ops::Range<u32>| {
+            if after_range.is_empty() {
+                if !before_range.is_empty() && !staged {
+                    marks.push((before_range.start as usize, LineChange::Removed));
+                }
+                return;
+            }
+            if before_range.is_empty() {
+                let kind = LineChange::Added;
+                for line in after_range.start as usize..after_range.end as usize {
+                    marks.push((line, kind));
+                }
+                return;
+            }
+            let kind = if staged {
+                LineChange::Added
+            } else {
+                LineChange::Modified
+            };
+            for line in after_range.start as usize..after_range.end as usize {
+                marks.push((line, kind));
+            }
+        },
+    );
+    marks
+}
+
 fn parse_porcelain(root: &Path, bytes: &[u8]) -> HashMap<PathBuf, GitFileStatus> {
     let mut statuses = HashMap::new();
     let mut parts = bytes
@@ -242,6 +505,37 @@ fn parse_porcelain(root: &Path, bytes: &[u8]) -> HashMap<PathBuf, GitFileStatus>
     statuses
 }
 
+/// Detailed per-file staging state for the Source Control panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Staging {
+    pub staged_additions: usize,
+    pub staged_deletions: usize,
+    pub unstaged_additions: usize,
+    pub unstaged_deletions: usize,
+}
+
+impl Staging {
+    /// Whether this file has any staged index changes.
+    pub fn has_staged(self) -> bool {
+        self.staged_additions > 0 || self.staged_deletions > 0
+    }
+
+    /// Whether this file has any unstaged worktree changes.
+    pub fn has_unstaged(self) -> bool {
+        self.unstaged_additions > 0 || self.unstaged_deletions > 0
+    }
+
+    /// Short badge: `M` (unstaged), `M+` (staged), `U` compound states.
+    pub fn badge(self) -> &'static str {
+        match (self.has_staged(), self.has_unstaged()) {
+            (true, true) => "M+",
+            (true, false) => "S",
+            (false, true) => "M",
+            (false, false) => " ",
+        }
+    }
+}
+
 fn classify(x: char, y: char) -> GitFileStatus {
     if x == '?' || y == '?' {
         return GitFileStatus::Untracked;
@@ -261,6 +555,49 @@ fn classify(x: char, y: char) -> GitFileStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    /// Create a three-line repo with one staged and one unstaged edit.
+    fn mixed_repo() -> (TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git")
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").expect("write");
+        run(&["add", "a.txt"]);
+        run(&["commit", "-qm", "init"]);
+        std::fs::write(root.join("a.txt"), "one\nTWO-staged\nthree\n").expect("write");
+        run(&["add", "a.txt"]);
+        std::fs::write(
+            root.join("a.txt"),
+            "one\nTWO-staged\nthree\nfour-unstaged\n",
+        )
+        .expect("write");
+        (dir, root.join("a.txt"))
+    }
+
+    #[test]
+    fn marks_distinguish_staged_and_unstaged_changes() {
+        let (_dir, file) = mixed_repo();
+        let repository = GitRepository::discover(&file).expect("discover");
+        let mut marks = repository.working_tree_changes(&file);
+        marks.sort();
+        // Line 1 (index 1) differs between HEAD and the index: staged.
+        assert!(marks.contains(&(1, LineChange::Added)));
+        // The new trailing line only exists in the worktree diff base.
+        assert!(marks.contains(&(3, LineChange::Added)));
+    }
 
     #[test]
     fn parses_porcelain_entries() {
@@ -289,6 +626,55 @@ mod tests {
                 .iter()
                 .any(|(_, kind)| *kind == crate::editor::GutterMark::Added)
         );
+    }
+
+    #[test]
+    fn marks_untracked_files_as_added() {
+        let (_dir, file) = mixed_repo();
+        let extra = file.parent().expect("parent").join("extra.txt");
+        std::fs::write(&extra, "one\ntwo\n").expect("write");
+        let repository = GitRepository::discover(&extra).expect("discover");
+        let mut repository = repository;
+        repository.refresh().expect("refresh");
+        assert_eq!(
+            repository.status_for(&extra),
+            Some(GitFileStatus::Untracked)
+        );
+        assert_eq!(
+            repository.working_tree_changes(&extra),
+            vec![(0, LineChange::Added), (1, LineChange::Added)]
+        );
+    }
+
+    #[test]
+    fn untracked_files_show_all_unstaged_changes() {
+        let (_dir, file) = mixed_repo();
+        let mut repository = GitRepository::discover(&file).expect("discover");
+        let extra = repository.root().join("extra.txt");
+        std::fs::write(&extra, "one\ntwo\n").expect("write");
+        repository.refresh().expect("refresh");
+        let summary = repository.staging_summary();
+        let record = summary.get(&extra).expect("record");
+        assert_eq!(record.unstaged_additions, 2);
+        assert_eq!(record.staged_additions, 0);
+    }
+
+    #[test]
+    fn staging_summary_counts_staged_edits() {
+        let (_dir, file) = mixed_repo();
+        let mut repository = GitRepository::discover(&file).expect("discover");
+        repository.refresh().expect("refresh");
+        let summary = repository.staging_summary();
+        let record = summary.get(&file).expect("record");
+        assert!(record.has_staged());
+        assert!(record.has_unstaged());
+        assert_eq!(record.badge(), "M+");
+    }
+
+    #[test]
+    fn diff_marks_empty_inputs() {
+        assert!(diff_marks(&[], &[], false).is_empty());
+        assert!(diff_marks(&[], &["only".to_string()], false) == vec![(0, LineChange::Added)]);
     }
 
     #[test]

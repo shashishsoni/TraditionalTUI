@@ -338,17 +338,35 @@ impl App {
             return;
         }
         self.state.sidebar_search.busy = true;
+        self.state.sidebar_search.searching = true;
         self.state.sidebar_search.selected = 0;
         self.spawn_search(query);
     }
 
     fn spawn_search(&self, query: String) {
         let root = self.state.workspace.root().to_path_buf();
-        let max = self.state.config.performance.max_project_search_results;
+        let max = self
+            .state
+            .config
+            .performance
+            .max_project_search_results
+            .min(self.state.sidebar_search.max_results.max(1));
+        let case = if self.state.sidebar_search.case_sensitive {
+            crate::search::CaseMode::Sensitive
+        } else {
+            crate::search::CaseMode::Smart
+        };
+        let whole_word = self.state.sidebar_search.whole_word;
         let sender = self.event_tx.clone();
         let search_query = query;
-        std::mem::drop(tokio::task::spawn_blocking(
-            move || match crate::search::search_project(&root, &search_query, false, max) {
+        std::mem::drop(tokio::task::spawn_blocking(move || {
+            match crate::search::search_project_advanced(
+                &root,
+                &search_query,
+                case,
+                whole_word,
+                max,
+            ) {
                 Ok(results) => {
                     let _ = sender.blocking_send(AppEvent::SearchResults {
                         query: search_query,
@@ -358,8 +376,8 @@ impl App {
                 Err(error) => {
                     let _ = sender.blocking_send(AppEvent::SearchFailed(error.to_string()));
                 }
-            },
-        ));
+            }
+        }));
     }
 
     fn apply_buffer_search(&mut self, query: &str) {

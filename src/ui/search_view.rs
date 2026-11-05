@@ -70,12 +70,21 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         Rect::new(content.x, inner.y, content.width, 1),
     );
 
+    let case_badge = if search.case_sensitive {
+        "[Aa]"
+    } else {
+        "[aa]"
+    };
+    let word_badge = if search.whole_word { "[=]" } else { "[~]" };
     let status = if search.busy {
         " searching…".to_string()
     } else if search.query.trim().is_empty() {
         " type a query and press Enter".to_string()
     } else {
-        format!(" {} result(s)", search.results.len())
+        format!(
+            " {} result(s)  {case_badge} case  {word_badge} word  Alt+C/W toggles",
+            search.results.len()
+        )
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(

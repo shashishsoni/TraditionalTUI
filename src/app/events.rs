@@ -118,6 +118,41 @@ impl App {
                     .source_control_selected
                     .min(count.saturating_sub(1));
             }
+            AppEvent::GitGutter {
+                root,
+                version,
+                marks,
+            } => {
+                if root.as_path() != self.state.workspace.root() {
+                    return;
+                }
+                if let Some(document) = self.state.active_doc_mut() {
+                    if document.version == version || document.version.saturating_sub(version) <= 4
+                    {
+                        let translated: Vec<(usize, crate::editor::GutterMark)> = marks
+                            .into_iter()
+                            .map(|(line, change)| {
+                                let kind = match change {
+                                    crate::git::LineChange::Added => {
+                                        crate::editor::GutterMark::Added
+                                    }
+                                    crate::git::LineChange::Modified => {
+                                        crate::editor::GutterMark::Modified
+                                    }
+                                    crate::git::LineChange::Removed => {
+                                        crate::editor::GutterMark::Deleted
+                                    }
+                                };
+                                (line, kind)
+                            })
+                            .collect();
+                        document.git_diff = crate::editor::GutterDiff {
+                            marks: translated,
+                            version,
+                        };
+                    }
+                }
+            }
             AppEvent::GitFailed { root, error } => {
                 if root.as_path() != self.state.workspace.root() {
                     return;
@@ -252,10 +287,79 @@ impl App {
             || self.state.status_message.is_some()
     }
 
+    pub(super) fn queue_git_gutter(&mut self) {
+        let Some(repository) = self.state.git.as_ref() else {
+            return;
+        };
+        let Some(document) = self.state.active_doc() else {
+            return;
+        };
+        let Some(path) = document.path.clone() else {
+            return;
+        };
+        let version = document.version;
+        let root = self.state.workspace.root().to_path_buf();
+        let marks = repository.working_tree_changes(&path);
+        let sender = self.event_tx.clone();
+        std::mem::drop(tokio::task::spawn_blocking(move || {
+            let _ = sender.blocking_send(AppEvent::GitGutter {
+                root,
+                version,
+                marks,
+            });
+        }));
+    }
+
+    /// Synchronous fallback used after edits and staging. Synchronous git
+    /// lookups keep the gutter deterministic in tests and when the runtime
+    /// is already saturated.
+    pub(super) fn refresh_git_gutter(&mut self) -> bool {
+        let (path, version) = match self.state.active_doc() {
+            Some(document) => match document.path.clone() {
+                Some(path) => (path, document.version),
+                None => return false,
+            },
+            None => return false,
+        };
+        let Some(repository) = self.state.git.as_ref() else {
+            return false;
+        };
+        let marks = repository.working_tree_changes(&path);
+        let Some(document) = self.state.active_doc_mut() else {
+            return false;
+        };
+        if document.version != version {
+            return false;
+        }
+        let translated: Vec<(usize, crate::editor::GutterMark)> = marks
+            .into_iter()
+            .map(|(line, change)| {
+                let kind = match change {
+                    crate::git::LineChange::Added => crate::editor::GutterMark::Added,
+                    crate::git::LineChange::Modified => crate::editor::GutterMark::Modified,
+                    crate::git::LineChange::Removed => crate::editor::GutterMark::Deleted,
+                };
+                (line, kind)
+            })
+            .collect();
+        if document.git_diff.marks == translated {
+            return false;
+        }
+        document.git_diff = crate::editor::GutterDiff {
+            marks: translated,
+            version,
+        };
+        true
+    }
+
     pub(super) async fn tick(&mut self) -> bool {
         let mut changed = false;
 
         if self.state.terminal.drain() > 0 {
+            changed = true;
+        }
+
+        if self.refresh_git_gutter() {
             changed = true;
         }
 

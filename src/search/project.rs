@@ -47,6 +47,15 @@ pub fn index_files(root: &Path, max: usize) -> Vec<PathBuf> {
     files
 }
 
+/// Case handling for project-wide search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaseMode {
+    #[default]
+    Smart,
+    Sensitive,
+    Insensitive,
+}
+
 /// Search `root` for `query` (regex), returning up to `max` matches.
 pub fn search_project(
     root: &Path,
@@ -54,13 +63,39 @@ pub fn search_project(
     case_sensitive: bool,
     max: usize,
 ) -> Result<Vec<SearchMatch>, SearchError> {
+    let mode = if case_sensitive {
+        CaseMode::Sensitive
+    } else {
+        CaseMode::Insensitive
+    };
+    search_project_advanced(root, query, mode, false, max)
+}
+
+/// Search with explicit case mode and whole-word anchoring.
+pub fn search_project_advanced(
+    root: &Path,
+    query: &str,
+    case: CaseMode,
+    whole_word: bool,
+    max: usize,
+) -> Result<Vec<SearchMatch>, SearchError> {
     if query.is_empty() || max == 0 {
         return Ok(Vec::new());
     }
 
+    let pattern = if whole_word {
+        format!(r"\b(?:{query})\b")
+    } else {
+        query.to_string()
+    };
+    let smart_sensitive = match case {
+        CaseMode::Sensitive => true,
+        CaseMode::Insensitive => false,
+        CaseMode::Smart => query.chars().any(|ch| ch.is_uppercase()),
+    };
     let matcher = RegexMatcherBuilder::new()
-        .case_insensitive(!case_sensitive)
-        .build(query)?;
+        .case_insensitive(!smart_sensitive)
+        .build(&pattern)?;
     let mut searcher = SearcherBuilder::new()
         .line_number(true)
         .binary_detection(BinaryDetection::quit(b'\x00'))
@@ -159,5 +194,31 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let error = search_project(dir.path(), "(", true, 10).expect_err("must fail");
         assert!(matches!(error, SearchError::Pattern(_)));
+    }
+
+    #[test]
+    fn smart_case_and_whole_word_search() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.txt"), "Needle needle\n").expect("write");
+        // Smart: lowercase stays case-insensitive.
+        assert_eq!(
+            search_project_advanced(dir.path(), "needle", CaseMode::Smart, false, 10)
+                .expect("search")
+                .len(),
+            1
+        );
+        // Smart: uppercase becomes case-sensitive.
+        assert!(
+            search_project_advanced(dir.path(), "Needle", CaseMode::Smart, false, 10)
+                .expect("search")
+                .iter()
+                .all(|hit| hit.text.contains("Needle"))
+        );
+        // Whole-word: "Need" must not match "Needle".
+        assert!(
+            search_project_advanced(dir.path(), "Need", CaseMode::Smart, true, 10)
+                .expect("search")
+                .is_empty()
+        );
     }
 }

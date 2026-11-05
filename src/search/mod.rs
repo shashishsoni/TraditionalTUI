@@ -4,4 +4,4 @@ mod fuzzy;
 mod project;
 
 pub use fuzzy::{FuzzyMatch, FuzzyPicker};
-pub use project::{SearchMatch, index_files, search_project};
+pub use project::{CaseMode, SearchMatch, index_files, search_project, search_project_advanced};

@@ -453,7 +453,7 @@ impl App {
                     }
                 }
                 if regions.tab_bar.contains(position) {
-                    self.select_tab_at(regions.tab_bar, mouse.column);
+                    self.select_tab_at(regions.tab_bar, mouse.column, mouse.row);
                     return;
                 }
                 if regions.editor.contains(position) {
@@ -510,30 +510,43 @@ impl App {
         }
     }
 
-    fn select_tab_at(&mut self, tab_bar: Rect, column: u16) {
-        let mut x = tab_bar.x;
-        for (index, document) in self.state.workspace.documents().iter().enumerate() {
-            let label = format!(
-                " {} {}{} ",
-                if self.state.workspace.active_index() == Some(index) {
-                    "▸"
-                } else {
-                    " "
-                },
-                document.display_name(),
-                if document.dirty { " *" } else { "" }
-            );
-            let width = label.chars().count() as u16 + 1;
-            if column >= x && column < x + width {
-                self.state.workspace.switch_to(index);
-                self.state.focus = FocusTarget::Editor;
+    fn select_tab_at(&mut self, tab_bar: Rect, column: u16, row: u16) {
+        if let Some((index, close)) =
+            crate::ui::editor_view::tab_hit_at(tab_bar, &self.state, column, row)
+        {
+            if close {
+                self.close_tab_at(index);
                 return;
             }
-            x += width;
-            if x >= tab_bar.right() {
-                break;
-            }
+            self.state.workspace.switch_to(index);
+            self.state.focus = FocusTarget::Editor;
         }
+    }
+
+    fn close_tab_at(&mut self, index: usize) {
+        let count = self.state.workspace.len();
+        if index >= count {
+            return;
+        }
+        let dirty = self
+            .state
+            .workspace
+            .document(index)
+            .is_some_and(|document| document.dirty);
+        if dirty && !self.state.quit_armed {
+            self.state.quit_armed = true;
+            self.state.set_status(
+                "Unsaved changes — press ✕ again to discard, Ctrl+S to save",
+                MessageKind::Warning,
+            );
+            return;
+        }
+        self.state.quit_armed = false;
+        self.state.workspace.close(index);
+        if self.state.workspace.is_empty() {
+            self.state.workspace.scratch();
+        }
+        self.state.set_status("Tab closed", MessageKind::Info);
     }
 
     fn place_cursor(&mut self, area: Rect, column: u16, row: u16) {
@@ -617,6 +630,24 @@ impl App {
                     self.state.source_control_selected.saturating_sub(1);
             }
             KeyCode::Enter | KeyCode::Char('o') => self.open_source_control_file(),
+            KeyCode::Char('s') => match self.state.toggle_staged() {
+                Ok(_) => {
+                    self.spawn_git_refresh();
+                    self.queue_git_gutter();
+                }
+                Err(error) => self
+                    .state
+                    .set_status(format!("git stage failed: {error}"), MessageKind::Error),
+            },
+            KeyCode::Char('u') => match self.state.toggle_staged() {
+                Ok(_) => {
+                    self.spawn_git_refresh();
+                    self.queue_git_gutter();
+                }
+                Err(error) => self
+                    .state
+                    .set_status(format!("git unstage failed: {error}"), MessageKind::Error),
+            },
             KeyCode::Char('b') => self.open_branch_picker(),
             KeyCode::Char('r') => self.spawn_git_refresh(),
             KeyCode::Char('q') | KeyCode::Esc => self.state.focus_editor(),
@@ -639,6 +670,18 @@ impl App {
                     self.state.sidebar_search.selected =
                         (self.state.sidebar_search.selected + 1).min(count - 1);
                 }
+            }
+            KeyCode::Char('c') if alt => {
+                self.state.sidebar_search.toggle_case();
+                self.start_sidebar_search();
+            }
+            KeyCode::Char('w') if alt => {
+                self.state.sidebar_search.toggle_word();
+                self.start_sidebar_search();
+            }
+            KeyCode::Char('r') if alt => {
+                self.state.sidebar_search.toggle_regex();
+                self.start_sidebar_search();
             }
             KeyCode::Enter => {
                 if let Some(result) = self
@@ -671,7 +714,7 @@ impl App {
 
     fn open_source_control_file(&mut self) {
         let files = self.state.source_control_files();
-        let Some((path, _)) = files.get(self.state.source_control_selected) else {
+        let Some((path, _, _)) = files.get(self.state.source_control_selected) else {
             return;
         };
         let path = path.clone();
@@ -875,26 +918,27 @@ impl App {
     }
 
     pub(super) fn queue_lsp_current(&mut self, sync: LspSync) {
-        if !self.state.lsp.is_configured() {
-            return;
-        }
         let Some(document) = self.state.active_doc() else {
             return;
         };
         let Some(path) = document.path.clone() else {
             return;
         };
-        self.lsp_request = Some(LspRequest {
-            path,
-            language: document.language_id.clone(),
-            sync,
-        });
+        if self.state.lsp.is_configured() {
+            self.lsp_request = Some(LspRequest {
+                path: path.clone(),
+                language: document.language_id.clone(),
+                sync,
+            });
+        }
+        self.refresh_git_gutter();
     }
 
     pub(super) fn note_edit(&mut self) {
         self.lsp_dirty = true;
         self.lsp_dirty_at = Some(std::time::Instant::now());
         self.state.ensure_cursor_visible();
+        self.refresh_git_gutter();
     }
 }
 

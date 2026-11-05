@@ -101,8 +101,9 @@ fn compose(state: &AppState) -> (Vec<Span<'static>>, Option<(u16, u16)>) {
             .sum::<u16>();
         let (git_text, git_color) = match &state.git {
             Some(git) => match git.branch() {
-                Some(branch) => (format!("│ ⑂ {branch} "), theme.ui.hint),
-                None => ("│ ⑂ detached ".to_string(), theme.ui.warning),
+                Some(branch) if !git.is_detached() => (format!("│ ⑂ {branch} "), theme.ui.hint),
+                Some(branch) => (format!("│ ⑂⌖ {branch} "), theme.ui.warning),
+                None => ("│ ◇ open folder ".to_string(), theme.ui.dim),
             },
             None => ("│ ◇ open folder ".to_string(), theme.ui.dim),
         };

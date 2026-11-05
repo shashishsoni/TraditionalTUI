@@ -131,11 +131,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .min(files.len().saturating_sub(1));
     let start = selected.saturating_sub(list_height.saturating_sub(1));
     let mut lines = Vec::new();
-    for (index, (path, status)) in files.iter().enumerate().skip(start).take(list_height) {
+    for (index, (path, status, badge)) in files.iter().enumerate().skip(start).take(list_height) {
         let display = relative_display(state.workspace.root(), path);
         let mut line = Line::from(vec![
             Span::styled(
-                format!("{} ", status.badge()),
+                format!("{badge} "),
                 Style::default()
                     .fg(git_color(*status, state))
                     .add_modifier(Modifier::BOLD),
