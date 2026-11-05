@@ -182,6 +182,7 @@ impl AcpManager {
         let text = text.to_string();
         let turn_tx = self.turn_tx.clone();
         self.state = AcpState::Busy;
+        self.last_error = None;
         self.supervisor.record("prompt sent");
         tokio::spawn(async move {
             let result = connection

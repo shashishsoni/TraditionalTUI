@@ -115,6 +115,8 @@ pub struct UiTheme {
     pub warning: Color,
     pub hint: Color,
     pub success: Color,
+    pub added_bg: Color,
+    pub deleted_bg: Color,
 }
 
 /// Syntax token colors.
@@ -169,6 +171,8 @@ impl Theme {
                     warning: rgb(depth, 0xe0, 0xaf, 0x68),
                     hint: rgb(depth, 0x7d, 0xcf, 0xff),
                     success: rgb(depth, 0x9e, 0xce, 0x6a),
+                    added_bg: rgb(depth, 0x1e, 0x3a, 0x28),
+                    deleted_bg: rgb(depth, 0x43, 0x23, 0x2c),
                 },
                 SyntaxTheme {
                     keyword: rgb(depth, 0xbb, 0x9a, 0xf7),
@@ -202,6 +206,8 @@ impl Theme {
                     warning: rgb(depth, 0xf9, 0xe2, 0xaf),
                     hint: rgb(depth, 0x89, 0xd8, 0xeb),
                     success: rgb(depth, 0xa6, 0xe3, 0xa1),
+                    added_bg: rgb(depth, 0x23, 0x44, 0x2e),
+                    deleted_bg: rgb(depth, 0x4d, 0x28, 0x3a),
                 },
                 SyntaxTheme {
                     keyword: rgb(depth, 0xcb, 0xa6, 0xf7),
@@ -235,6 +241,8 @@ impl Theme {
                     warning: rgb(depth, 0xfa, 0xbd, 0x2f),
                     hint: rgb(depth, 0x8e, 0xc0, 0x7c),
                     success: rgb(depth, 0xb8, 0xbb, 0x26),
+                    added_bg: rgb(depth, 0x3a, 0x40, 0x24),
+                    deleted_bg: rgb(depth, 0x4e, 0x2a, 0x23),
                 },
                 SyntaxTheme {
                     keyword: rgb(depth, 0xd3, 0x86, 0x9b),
@@ -268,6 +276,8 @@ impl Theme {
                     warning: rgb(depth, 0xe5, 0xc0, 0x7b),
                     hint: rgb(depth, 0x56, 0xb6, 0xc2),
                     success: rgb(depth, 0x98, 0xc3, 0x79),
+                    added_bg: rgb(depth, 0x26, 0x3d, 0x2c),
+                    deleted_bg: rgb(depth, 0x46, 0x2a, 0x2e),
                 },
                 SyntaxTheme {
                     keyword: rgb(depth, 0xc6, 0x78, 0xdd),
@@ -301,6 +311,8 @@ impl Theme {
                     warning: rgb(depth, 0xdf, 0x8e, 0x1d),
                     hint: rgb(depth, 0x17, 0x92, 0x99),
                     success: rgb(depth, 0x40, 0xa0, 0x2b),
+                    added_bg: rgb(depth, 0xdc, 0xef, 0xdc),
+                    deleted_bg: rgb(depth, 0xf5, 0xdc, 0xe2),
                 },
                 SyntaxTheme {
                     keyword: rgb(depth, 0x88, 0x39, 0xef),

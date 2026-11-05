@@ -156,6 +156,97 @@ pub enum EditMode {
     Command,
 }
 
+/// Inline AI edit shown inside the center editor instead of a separate modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineDiffState {
+    /// Document line (zero based) where the virtual diff rows start.
+    pub top_line: u32,
+    /// One entry per rendered preview row. `None` is a context separator.
+    pub rows: Vec<Option<InlineDiffRow>>,
+    /// Position inside `rows`, used for paging and keyboard navigation.
+    pub selected: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineDiffRow {
+    pub kind: crate::ai::DiffLineKind,
+    pub text: String,
+    pub old_line: Option<u32>,
+    pub new_line: Option<u32>,
+}
+
+impl InlineDiffState {
+    /// Build rows from an AI preview, keeping a few context lines around
+    /// every change so the diff reads like a Cursor hunk. `top_line` is the
+    /// document line (zero based) the first row corresponds to.
+    pub fn from_preview(diff: &crate::ai::DiffPreview) -> Self {
+        let mut rows: Vec<Option<InlineDiffRow>> = Vec::with_capacity(diff.lines.len());
+        let mut iter = diff.lines.iter().peekable();
+        while let Some(line) = iter.next() {
+            match line.kind {
+                crate::ai::DiffLineKind::Context => {
+                    let is_first = rows.is_empty();
+                    let next_is_change = iter
+                        .peek()
+                        .is_some_and(|next| !matches!(next.kind, crate::ai::DiffLineKind::Context));
+                    if is_first || next_is_change {
+                        rows.push(Some(InlineDiffRow {
+                            kind: line.kind,
+                            text: line.text.clone(),
+                            old_line: line.old_line,
+                            new_line: line.new_line,
+                        }));
+                    } else if rows.last().is_some_and(|last| last.is_none()) {
+                        // Collapse long context stretches into one separator.
+                    } else {
+                        rows.push(None);
+                    }
+                }
+                kind => rows.push(Some(InlineDiffRow {
+                    kind,
+                    text: line.text.clone(),
+                    old_line: line.old_line,
+                    new_line: line.new_line,
+                })),
+            }
+        }
+
+        let anchor = diff
+            .lines
+            .iter()
+            .filter_map(|line| {
+                if line.kind == crate::ai::DiffLineKind::Context {
+                    line.old_line.or(line.new_line)
+                } else {
+                    None
+                }
+            })
+            .min()
+            .unwrap_or(1);
+        Self {
+            top_line: anchor.saturating_sub(1),
+            rows,
+            selected: 0,
+        }
+    }
+
+    pub fn added(&self) -> usize {
+        self.rows
+            .iter()
+            .flatten()
+            .filter(|row| row.kind == crate::ai::DiffLineKind::Added)
+            .count()
+    }
+
+    pub fn removed(&self) -> usize {
+        self.rows
+            .iter()
+            .flatten()
+            .filter(|row| row.kind == crate::ai::DiffLineKind::Removed)
+            .count()
+    }
+}
+
 impl EditMode {
     pub fn label(self) -> &'static str {
         match self {
@@ -221,12 +312,7 @@ impl ModalKind {
     pub fn has_list(self) -> bool {
         !matches!(
             self,
-            Self::AiPrompt
-                | Self::BufferSearch
-                | Self::Rename
-                | Self::NewFile
-                | Self::OpenFolder
-                | Self::DiffPreview
+            Self::AiPrompt | Self::BufferSearch | Self::Rename | Self::NewFile | Self::DiffPreview
         )
     }
 }
@@ -240,7 +326,7 @@ pub enum ModalAction {
     Theme(ThemeName),
     Agent(String),
     SwitchBranch(String),
-    OpenFolder,
+    OpenFolder(PathBuf),
 }
 
 /// One selectable modal row.
@@ -346,7 +432,8 @@ pub struct AppState {
     pub sidebar_search: SidebarSearch,
     pub source_control_selected: usize,
     pub bottom_tab: BottomTab,
-    pub active_modal: Option<ModalState>,
+    pub modal_state: Option<ModalState>,
+    pub inline_diff: Option<InlineDiffState>,
     pub status_message: Option<StatusMessage>,
     pub should_quit: bool,
     pub file_index: Vec<PathBuf>,
@@ -465,7 +552,8 @@ impl AppState {
         self.sidebar_view = SidebarView::Explorer;
         self.sidebar_search = SidebarSearch::new();
         self.source_control_selected = 0;
-        self.active_modal = None;
+        self.modal_state = None;
+        self.inline_diff = None;
         self.search.clear();
         self.pending = None;
         self.command_buffer.clear();
@@ -525,7 +613,8 @@ impl AppState {
             sidebar_search: SidebarSearch::new(),
             source_control_selected: 0,
             bottom_tab: BottomTab::Terminal,
-            active_modal: None,
+            modal_state: None,
+            inline_diff: None,
             status_message: None,
             should_quit: false,
             file_index: Vec::new(),

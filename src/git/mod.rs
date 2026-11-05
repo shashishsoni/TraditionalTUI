@@ -154,6 +154,11 @@ impl GitRepository {
         self.branch.as_deref().is_none_or(|branch| branch == "HEAD")
     }
 
+    /// Workspace-root-relative path for git object lookups.
+    pub fn display_root_for(&self, _absolute: &Path) -> Option<PathBuf> {
+        Some(self.root.clone())
+    }
+
     /// Read a file from `HEAD`, returning `Ok(None)` when untracked or when
     /// git cannot produce the content. `git show` prints nothing for an empty
     /// HEAD file, so zero-byte output is `None`, not `Some("")`.
@@ -195,14 +200,15 @@ impl GitRepository {
             .is_some_and(|status| *status == GitFileStatus::Untracked)
     }
 
-    /// Per-line change marks: unstaged (worktree vs index) plus staged
+    /// Per-file change marks: unstaged (worktree vs index) plus staged
     /// differences (index vs HEAD). Paths outside the repository root are
-    /// treated as unknown content rather than an error.
-    pub fn working_tree_changes(&self, path: &Path) -> Vec<(usize, LineChange)> {
-        let escaped = crate::platform::paths::relative_display(&self.root, path);
+    /// treated as unknown content rather than an error. `root` anchors
+    /// display-relative normalization for symlinked or remapped checkouts.
+    pub fn working_tree_changes(&self, root: &Path, path: &Path) -> Vec<(usize, LineChange)> {
+        let escaped = crate::platform::paths::relative_display(root, path);
         let relative: PathBuf = if escaped == path.to_string_lossy().replace('\\', "/") {
             // Outside the root (or already absolute): try stripping the root.
-            match path.strip_prefix(&self.root) {
+            match path.strip_prefix(root) {
                 Ok(stripped) => stripped.to_path_buf(),
                 Err(_) => return Vec::new(),
             }
@@ -597,7 +603,8 @@ mod tests {
     fn marks_distinguish_staged_and_unstaged_changes() {
         let (_dir, file) = mixed_repo();
         let repository = GitRepository::discover(&file).expect("discover");
-        let mut marks = repository.working_tree_changes(&file);
+        let root = repository.root().to_path_buf();
+        let mut marks = repository.working_tree_changes(&root, &file);
         marks.sort();
         // Line 1 (index 1) differs between HEAD and the index: staged.
         assert!(marks.contains(&(1, LineChange::Added)));
@@ -646,8 +653,9 @@ mod tests {
             repository.status_for(&extra),
             Some(GitFileStatus::Untracked)
         );
+        let root = repository.root().to_path_buf();
         assert_eq!(
-            repository.working_tree_changes(&extra),
+            repository.working_tree_changes(&root, &extra),
             vec![(0, LineChange::Added), (1, LineChange::Added)]
         );
     }

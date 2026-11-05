@@ -11,7 +11,7 @@ use crate::ai::DiffLineKind;
 use crate::app::state::{AppState, ModalKind, ModalState};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
-    let Some(modal) = &state.active_modal else {
+    let Some(modal) = &state.modal_state else {
         return;
     };
     let theme = &state.theme;
@@ -63,7 +63,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ModalKind::GlobalSearch => " Enter search · ↑↓ select · Esc close",
         ModalKind::AiPrompt => " Enter send · Esc cancel",
         ModalKind::Rename | ModalKind::NewFile => " Enter confirm · Esc cancel",
-        ModalKind::OpenFolder => " Enter open · Esc cancel",
+        ModalKind::OpenFolder => " Tab complete · Enter open · Esc cancel",
         ModalKind::BranchPicker => " Enter switch · Alt+O open folder · Esc close",
         ModalKind::DiffPreview => " ↑↓ scroll · Esc close",
         _ => " ↑↓ select · Enter confirm · Esc close",

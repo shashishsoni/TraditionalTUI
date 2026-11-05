@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
-use crate::ai::{AiState, ChatRole, DiffLineKind};
+use crate::ai::{AiState, ChatRole};
 use crate::app::state::{AppState, FocusTarget};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -107,6 +107,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     if let Some(diff) = &state.diff_preview {
+        // The edit itself is rendered inline in the center editor; the sidebar
+        // only carries the summary and the accept/reject affordances.
         lines.push(Line::from(vec![
             Span::styled(
                 " Edit preview ",
@@ -118,49 +120,23 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 format!("+{} −{}", diff.added(), diff.removed()),
                 Style::default().fg(theme.ui.dim),
             ),
-            Span::styled(
-                "  d full · y accept · n reject",
-                Style::default().fg(theme.ui.dim),
-            ),
         ]));
         lines.push(Line::from(Span::styled(
             format!(" {}", diff.path.display()),
-            Style::default().fg(theme.ui.dim),
+            Style::default().fg(theme.ui.hint),
         )));
-        if diff.is_empty() {
+        if state.inline_diff.is_some() {
             lines.push(Line::from(Span::styled(
-                " No line changes (whitespace or binary)",
+                " shown inline in the editor",
                 Style::default().fg(theme.ui.dim),
             )));
         }
-        let changed: Vec<_> = diff
-            .lines
-            .iter()
-            .filter(|line| line.kind != DiffLineKind::Context)
-            .collect();
-        for line in changed.iter().take(6) {
-            let (prefix, color) = match line.kind {
-                DiffLineKind::Added => ("+ ", theme.ui.success),
-                DiffLineKind::Removed => ("- ", theme.ui.error),
-                DiffLineKind::Context => ("  ", theme.ui.dim),
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    prefix.to_string(),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    line.text.clone(),
-                    Style::default().fg(color).bg(theme.ui.selection),
-                ),
-            ]));
-        }
-        if changed.len() > 6 {
-            lines.push(Line::from(Span::styled(
-                " … d opens full diff",
-                Style::default().fg(theme.ui.dim),
-            )));
-        }
+        lines.push(Line::from(vec![
+            Span::styled(" Alt+A ", Style::default().fg(theme.ui.success)),
+            Span::styled("accept   ", Style::default().fg(theme.ui.dim)),
+            Span::styled("Alt+R ", Style::default().fg(theme.ui.error)),
+            Span::styled("reject", Style::default().fg(theme.ui.dim)),
+        ]));
         lines.push(Line::from(""));
     }
 

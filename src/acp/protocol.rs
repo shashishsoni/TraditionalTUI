@@ -37,6 +37,9 @@ pub enum AcpEvent {
 
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, AcpError>>>>>;
 
+/// Handshake and session setup requests are bounded; prompt turns are not.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A live agent subprocess and its JSON-RPC connection.
 pub struct AcpConnection {
     child: std::sync::Mutex<Option<Child>>,
@@ -144,13 +147,18 @@ impl AcpConnection {
     }
 
     /// Send a prompt turn and await the agent's completion result.
+    ///
+    /// A turn can legitimately run for several minutes while the agent reads
+    /// files and calls tools, so it is *not* bounded by the short request
+    /// timeout used for handshake and session setup.
     pub async fn prompt(&self, session_id: &str, text: &str) -> Result<Value, AcpError> {
-        self.request(
+        self.request_with_timeout(
             "session/prompt",
             json!({
                 "sessionId": session_id,
                 "prompt": [{ "type": "text", "text": text }],
             }),
+            None,
         )
         .await
     }
@@ -160,24 +168,50 @@ impl AcpConnection {
             .await
     }
 
+    /// Send a bounded request, used for handshake and session setup.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, AcpError> {
+        self.request_with_timeout(method, params, Some(REQUEST_TIMEOUT))
+            .await
+    }
+
+    /// `None` means wait indefinitely, which is what a prompt turn needs.
+    pub async fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value, AcpError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().await.insert(id, sender);
-        self.send(json!({
+
+        let message = json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params,
-        }))
-        .await?;
+        });
+        if let Err(error) = self.send(message).await {
+            self.pending.lock().await.remove(&id);
+            return Err(error);
+        }
 
-        match tokio::time::timeout(Duration::from_secs(30), receiver).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(AcpError::NotRunning),
+        let resolved = match timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, receiver).await {
+                Ok(resolved) => resolved,
+                Err(_) => {
+                    self.pending.lock().await.remove(&id);
+                    return Err(AcpError::Timeout);
+                }
+            },
+            None => receiver.await,
+        };
+
+        match resolved {
+            Ok(result) => result,
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                Err(AcpError::Timeout)
+                Err(AcpError::NotRunning)
             }
         }
     }
@@ -332,6 +366,44 @@ async fn dispatch(message: Value, pending: &Pending, events: &mpsc::UnboundedSen
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn connection_with(outgoing: mpsc::Sender<Value>) -> AcpConnection {
+        let (_events, events_rx) = mpsc::unbounded_channel();
+        AcpConnection {
+            child: std::sync::Mutex::new(None),
+            outgoing,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_id: AtomicI64::new(1),
+            events_rx: std::sync::Mutex::new(events_rx),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_timeout_clears_pending_entry() {
+        let (outgoing, _outgoing_rx) = mpsc::channel(4);
+        let connection = connection_with(outgoing);
+
+        let error = connection
+            .request_with_timeout("initialize", json!({}), Some(Duration::from_millis(1)))
+            .await
+            .expect_err("must time out");
+        assert!(matches!(error, AcpError::Timeout));
+        assert!(connection.pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_send_clears_pending_entry() {
+        let (outgoing, outgoing_rx) = mpsc::channel(1);
+        drop(outgoing_rx);
+        let connection = connection_with(outgoing);
+
+        let error = connection
+            .request("initialize", json!({}))
+            .await
+            .expect_err("closed transport must fail");
+        assert!(matches!(error, AcpError::NotRunning));
+        assert!(connection.pending.lock().await.is_empty());
+    }
 
     #[tokio::test]
     async fn dispatch_resolves_pending_requests() {

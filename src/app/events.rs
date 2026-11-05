@@ -82,13 +82,13 @@ impl App {
                 self.state.fuzzy.set_items(labels);
                 if self
                     .state
-                    .active_modal
+                    .modal_state
                     .as_ref()
                     .is_some_and(|modal| modal.kind == ModalKind::FileFinder)
                 {
-                    if let Some(mut modal) = self.state.active_modal.take() {
+                    if let Some(mut modal) = self.state.modal_state.take() {
                         self.rebuild_modal_entries(&mut modal);
-                        self.state.active_modal = Some(modal);
+                        self.state.modal_state = Some(modal);
                     }
                 }
             }
@@ -182,7 +182,7 @@ impl App {
                         )
                     })
                     .collect();
-                if let Some(modal) = self.state.active_modal.as_mut() {
+                if let Some(modal) = self.state.modal_state.as_mut() {
                     if modal.kind == ModalKind::GlobalSearch && modal.query.trim() == query.trim() {
                         modal.entries = entries;
                         modal.selected = 0;
@@ -192,7 +192,7 @@ impl App {
             }
             AppEvent::SearchFailed(error) => {
                 self.state.sidebar_search.busy = false;
-                if let Some(modal) = self.state.active_modal.as_mut() {
+                if let Some(modal) = self.state.modal_state.as_mut() {
                     modal.busy = false;
                 }
                 self.state
@@ -200,16 +200,16 @@ impl App {
             }
             AppEvent::Notice(text) => self.state.set_status(text, MessageKind::Info),
             AppEvent::Branches { branches, current } => {
-                if let Some(modal) = self.state.active_modal.as_mut() {
+                if let Some(modal) = self.state.modal_state.as_mut() {
                     if modal.kind == ModalKind::BranchPicker {
                         modal
                             .entries
-                            .retain(|entry| matches!(entry.action, ModalAction::OpenFolder));
+                            .retain(|entry| matches!(entry.action, ModalAction::OpenFolder(_)));
                         if branches.is_empty() {
                             modal.entries.push(ModalEntry::new(
                                 "No local branches",
                                 "open a git project or initialize one",
-                                ModalAction::OpenFolder,
+                                ModalAction::OpenFolder(self.state.workspace.root().to_path_buf()),
                             ));
                         }
                         for branch in branches {
@@ -230,7 +230,7 @@ impl App {
                 }
             }
             AppEvent::BranchesFailed(error) => {
-                if let Some(modal) = self.state.active_modal.as_mut() {
+                if let Some(modal) = self.state.modal_state.as_mut() {
                     if modal.kind == ModalKind::BranchPicker {
                         modal.busy = false;
                     }
@@ -288,6 +288,9 @@ impl App {
     }
 
     pub(super) fn queue_git_gutter(&mut self) {
+        if self.refresh_git_gutter() {
+            return;
+        }
         let Some(repository) = self.state.git.as_ref() else {
             return;
         };
@@ -299,7 +302,7 @@ impl App {
         };
         let version = document.version;
         let root = self.state.workspace.root().to_path_buf();
-        let marks = repository.working_tree_changes(&path);
+        let marks = repository.working_tree_changes(&root, &path);
         let sender = self.event_tx.clone();
         std::mem::drop(tokio::task::spawn_blocking(move || {
             let _ = sender.blocking_send(AppEvent::GitGutter {
@@ -324,7 +327,8 @@ impl App {
         let Some(repository) = self.state.git.as_ref() else {
             return false;
         };
-        let marks = repository.working_tree_changes(&path);
+        let root = self.state.workspace.root().to_path_buf();
+        let marks = repository.working_tree_changes(&root, &path);
         let Some(document) = self.state.active_doc_mut() else {
             return false;
         };
@@ -571,15 +575,20 @@ impl App {
                 }
             }
             "tool_call" | "tool_call_update" => {
+                // Tool bookkeeping belongs in the Output log, not in the
+                // conversation. Appending it to the assistant turn is what
+                // turned the AI panel into an unreadable wall of
+                // `[tool] … in_progress` lines.
                 let title = update
                     .get("title")
                     .and_then(Value::as_str)
                     .unwrap_or("tool");
                 let status = update.get("status").and_then(Value::as_str).unwrap_or("");
-                self.state
-                    .ai
-                    .thread_mut()
-                    .append_assistant(&format!("\n[tool] {title} {status}"));
+                self.state.push_output(
+                    format!("[acp tool] {title} {status}")
+                        .trim_end()
+                        .to_string(),
+                );
             }
             "plan" => {
                 if let Some(entries) = update.get("entries").and_then(Value::as_array) {
@@ -596,10 +605,7 @@ impl App {
                         .collect::<Vec<_>>()
                         .join("\n");
                     if !text.is_empty() {
-                        self.state
-                            .ai
-                            .thread_mut()
-                            .append_assistant(&format!("\n[plan]\n{text}"));
+                        self.state.push_output(format!("[acp plan]\n{text}"));
                     }
                 }
             }
@@ -612,7 +618,19 @@ impl App {
             _ => {}
         }
         if let Some(diff) = crate::ai::DiffPreview::from_tool_call(update) {
-            self.state.diff_preview = Some(diff);
+            let same_target =
+                self.state.diff_preview.as_ref().is_some_and(|current| {
+                    current.path == diff.path && current.lines == diff.lines
+                });
+            self.state.diff_preview = Some(diff.clone());
+            if !same_target {
+                let inline_diff = crate::app::state::InlineDiffState::from_preview(&diff);
+                if let Some(document) = self.state.active_doc_mut() {
+                    document.top_line = inline_diff.top_line as usize;
+                }
+                self.state.inline_diff = Some(inline_diff);
+                self.state.focus_editor();
+            }
         }
     }
 

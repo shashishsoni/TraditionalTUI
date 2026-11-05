@@ -165,12 +165,12 @@ impl App {
     }
 
     fn handle_paste(&mut self, text: &str) {
-        if let Some(modal) = self.state.active_modal.as_mut() {
+        if let Some(modal) = self.state.modal_state.as_mut() {
             if modal.kind.has_input() {
                 modal.query.push_str(text);
                 let mut modal = modal.clone();
                 self.rebuild_modal_entries(&mut modal);
-                if let Some(active) = self.state.active_modal.as_mut() {
+                if let Some(active) = self.state.modal_state.as_mut() {
                     active.entries = modal.entries;
                     active.selected = modal.selected;
                 }

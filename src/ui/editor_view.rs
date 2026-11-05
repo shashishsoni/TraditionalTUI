@@ -49,10 +49,42 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let mut line = document.top_line.min(line_count.saturating_sub(1));
     let mut y = area.y;
     let mut highlight = HighlightState::default();
+    let inline_diff = state.inline_diff.as_ref();
+    let mut inline_index: usize = 0;
 
     while y < area.bottom() {
         if line >= line_count {
             break;
+        }
+        if let Some(diff) = inline_diff {
+            let top = diff.top_line as usize;
+            if line >= top && inline_index < diff.rows.len() {
+                let row = &diff.rows[inline_index];
+                inline_index += 1;
+                if render_inline_row(
+                    buffer,
+                    RowLayout {
+                        area,
+                        y,
+                        gutter_width,
+                        text_x,
+                    },
+                    row,
+                    inline_index.saturating_sub(1) == diff.selected,
+                    focused,
+                    state,
+                ) {
+                    y += 1;
+                    let Some(row) = row else { continue };
+                    if matches!(
+                        row.kind,
+                        crate::ai::DiffLineKind::Removed | crate::ai::DiffLineKind::Context
+                    ) {
+                        line += 1;
+                    }
+                    continue;
+                }
+            }
         }
         while line + 1 < line_count && document.folds.is_hidden(line) {
             line += 1;
@@ -365,6 +397,126 @@ fn put(buffer: &mut Buffer, area: Rect, x: u16, y: u16, symbol: &str, style: Sty
         cell.set_symbol(symbol);
         cell.set_style(style);
     }
+}
+
+/// Horizontal/gutter geometry for one rendered editor row.
+#[derive(Debug, Clone, Copy)]
+struct RowLayout {
+    area: Rect,
+    y: u16,
+    gutter_width: u16,
+    text_x: u16,
+}
+
+fn render_inline_row(
+    buffer: &mut Buffer,
+    layout: RowLayout,
+    row: &Option<crate::app::state::InlineDiffRow>,
+    selected: bool,
+    focused: bool,
+    state: &AppState,
+) -> bool {
+    let RowLayout {
+        area,
+        y,
+        gutter_width,
+        text_x,
+    } = layout;
+    let theme = &state.theme;
+    let Some(row) = row else {
+        let label = "⋯";
+        if text_x > area.x + 1 {
+            put(
+                buffer,
+                area,
+                text_x,
+                y,
+                label,
+                Style::default().fg(theme.ui.dim),
+            );
+        }
+        return true;
+    };
+    let (prefix, fg, bg) = match row.kind {
+        crate::ai::DiffLineKind::Removed => ("- ", theme.ui.error, theme.ui.deleted_bg),
+        crate::ai::DiffLineKind::Added => ("+ ", theme.ui.success, theme.ui.added_bg),
+        crate::ai::DiffLineKind::Context => ("  ", theme.ui.dim, theme.ui.background),
+    };
+    buffer.set_style(Rect::new(area.x, y, area.width, 1), Style::default().bg(bg));
+    for gutter_x in area.x..text_x {
+        put(buffer, area, gutter_x, y, " ", Style::default().bg(bg));
+    }
+    let mut x = area.x;
+    let marker = match row.kind {
+        crate::ai::DiffLineKind::Removed => "✕",
+        crate::ai::DiffLineKind::Added => "+",
+        crate::ai::DiffLineKind::Context => " ",
+    };
+    let digits = gutter_width.saturating_sub(3).max(2) as usize;
+    let number = row
+        .old_line
+        .or(row.new_line)
+        .map(|line| format!("{line:>digits$}"))
+        .unwrap_or_else(|| " ".repeat(digits));
+    let number_style = Style::default().fg(fg).bg(bg);
+    for ch in number.chars() {
+        if x >= text_x.saturating_sub(2) {
+            break;
+        }
+        put(buffer, area, x, y, &ch.to_string(), number_style);
+        x += 1;
+    }
+    if text_x > area.x + 1 {
+        put(
+            buffer,
+            area,
+            text_x.saturating_sub(2),
+            y,
+            marker,
+            Style::default().fg(fg).bg(bg),
+        );
+        put(
+            buffer,
+            area,
+            text_x.saturating_sub(1),
+            y,
+            "│",
+            Style::default().fg(theme.ui.border).bg(bg),
+        );
+    }
+
+    x = text_x;
+    put(
+        buffer,
+        area,
+        x,
+        y,
+        &prefix[..1],
+        Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+    );
+    x += 1;
+    for grapheme in unicode_segmentation::UnicodeSegmentation::graphemes(row.text.as_str(), true) {
+        if x >= area.right() {
+            break;
+        }
+        let style = if row.kind == crate::ai::DiffLineKind::Context {
+            Style::default().fg(theme.ui.foreground).bg(bg)
+        } else {
+            Style::default()
+                .fg(theme.ui.foreground)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD)
+        };
+        put(buffer, area, x, y, &sanitize_grapheme(grapheme), style);
+        x = x.saturating_add(1.max(crate::editor::text::grapheme_width(grapheme, 0, 4) as u16));
+    }
+    if selected && focused {
+        buffer.set_style(
+            Rect::new(area.x, y, area.width.min(2), 1),
+            Style::default().bg(theme.ui.accent),
+        );
+    }
+    true
 }
 
 fn git_mark_map(

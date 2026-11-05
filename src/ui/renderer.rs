@@ -109,7 +109,7 @@ mod tests {
                 "ctrl-s",
                 ModalAction::Command("file.save".into()),
             ));
-            state.active_modal = Some(modal);
+            state.modal_state = Some(modal);
         });
         assert!(content.contains("Command Palette"));
         assert!(content.contains("Save File"));
@@ -186,17 +186,23 @@ mod tests {
     }
 
     #[test]
-    fn ai_panel_renders_inline_red_green_diff() {
+    fn ai_panel_summarises_the_edit_and_the_editor_shows_it_inline() {
         let content = render_content(160, 50, |state| {
-            state.diff_preview = Some(crate::ai::DiffPreview::compute(
+            let diff = crate::ai::DiffPreview::compute(
                 std::path::PathBuf::from("src/main.rs"),
                 "fn main() {\n    old();\n}\n",
                 "fn main() {\n    new();\n}\n",
-            ));
+            );
+            state.diff_preview = Some(diff.clone());
+            state.inline_diff = Some(crate::app::state::InlineDiffState::from_preview(&diff));
         });
+        // Panel carries the summary only.
         assert!(content.contains("Edit preview"));
-        assert!(content.contains("old();"));
-        assert!(content.contains("new();"));
+        assert!(content.contains("shown inline in the editor"));
+        // The edit itself renders in the center editor, not beside it.
+        let editor = content.lines().take(45).collect::<Vec<_>>().join("\n");
+        assert!(editor.contains("old();"));
+        assert!(editor.contains("new();"));
     }
 
     #[test]
@@ -207,7 +213,7 @@ mod tests {
                 "old();\n",
                 "new();\n",
             ));
-            state.active_modal = Some(ModalState::new(ModalKind::DiffPreview));
+            state.modal_state = Some(ModalState::new(ModalKind::DiffPreview));
         });
         assert!(content.contains("AI Edit Preview"));
         assert!(content.contains("old();"));
@@ -219,26 +225,29 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut state = AppState::for_testing(dir.path());
         state.viewport = (160, 50);
-        state.diff_preview = Some(crate::ai::DiffPreview::compute(
+        let diff = crate::ai::DiffPreview::compute(
             std::path::PathBuf::from("src/main.rs"),
             "old();\n",
             "new();\n",
-        ));
+        );
+        state.inline_diff = Some(crate::app::state::InlineDiffState::from_preview(&diff));
+        state.diff_preview = Some(diff);
+        state.focus = crate::app::state::FocusTarget::Editor;
+        let document = state.active_doc_mut().expect("document");
+        document.rope = ropey::Rope::from_str("old();\n");
         let backend = TestBackend::new(160, 50);
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal
             .draw(|frame| UiRenderer.render(frame, &state))
             .expect("draw");
-        let ai = crate::ui::layout::compute(Rect::new(0, 0, 160, 50), &state.layout)
-            .ai
-            .expect("ai panel");
+        let editor = crate::ui::layout::compute(Rect::new(0, 0, 160, 50), &state.layout).editor;
         let buffer = terminal.backend().buffer();
         let mut removed_red = false;
         let mut added_green = false;
-        for y in ai.y..ai.bottom() {
-            for x in ai.x..ai.right() {
+        for y in editor.y..editor.bottom() {
+            for x in editor.x..editor.right() {
                 if let Some(cell) = buffer.cell((x, y)) {
-                    if cell.symbol() == "-" {
+                    if cell.symbol() == "✕" {
                         removed_red |= cell.style().fg == Some(state.theme.ui.error);
                     }
                     if cell.symbol() == "+" {
@@ -247,7 +256,13 @@ mod tests {
                 }
             }
         }
-        assert!(removed_red, "removed lines must be red");
-        assert!(added_green, "added lines must be green");
+        assert!(
+            removed_red,
+            "removed lines must be red in the editor gutter"
+        );
+        assert!(
+            added_green,
+            "added lines must be green in the editor gutter"
+        );
     }
 }

@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::acp::{PermissionDecision, PermissionPrompt};
 use crate::ai::DiffPreview;
 use crate::git::GitRepository;
-use crate::platform::paths::{PlatformPaths, relative_display};
+use crate::platform::paths::{PlatformPaths, canonicalize_clean, relative_display};
 use crate::ui::theme::ThemeName;
 
 use super::action::Action;
@@ -24,31 +24,59 @@ impl App {
         let mut modal = ModalState::new(kind);
         if kind == ModalKind::OpenFolder {
             modal.query = self.state.workspace.root().display().to_string();
+            self.rebuild_modal_entries(&mut modal);
+        } else {
+            self.rebuild_modal_entries(&mut modal);
         }
-        self.rebuild_modal_entries(&mut modal);
-        self.state.active_modal = Some(modal);
+        self.state.modal_state = Some(modal);
     }
 
     pub(super) fn show_permission(&mut self, prompt: PermissionPrompt) {
         if let Some(diff) = DiffPreview::from_tool_call(&prompt.tool_call) {
-            self.state.diff_preview = Some(diff);
+            self.open_inline_diff(&diff);
         }
         let mut modal = ModalState::new(ModalKind::PermissionPrompt);
         modal.permission = Some(prompt);
-        self.state.active_modal = Some(modal);
+        self.state.modal_state = Some(modal);
         self.state.focus_ai();
     }
 
     /// Open the full AI edit preview.
     pub(super) fn show_diff(&mut self) {
-        if self.state.diff_preview.is_none() {
+        let Some(diff) = self.state.diff_preview.clone() else {
             self.state
                 .set_status("No AI edit preview available", MessageKind::Warning);
             return;
+        };
+        self.open_inline_diff(&diff);
+    }
+
+    fn open_inline_diff(&mut self, diff: &crate::ai::DiffPreview) {
+        let inline_diff = crate::app::state::InlineDiffState::from_preview(diff);
+        if let Some(index) = self.state.document_index(&diff.path) {
+            self.state.workspace.switch_to(index);
+        } else if diff.path.is_file() {
+            let path = diff.path.clone();
+            if self.state.open_file(&path).is_ok() {
+                self.queue_lsp_current(LspSync::Open);
+            }
         }
-        let mut modal = ModalState::new(ModalKind::DiffPreview);
-        modal.selected = 0;
-        self.state.active_modal = Some(modal);
+        // The inline rows are anchored to a document line, so scroll the
+        // buffer to that line or the hunk renders at the wrong place.
+        if let Some(document) = self.state.active_doc_mut() {
+            document.top_line = inline_diff.top_line as usize;
+        }
+        self.state.inline_diff = Some(inline_diff);
+        self.state.focus_editor();
+        self.state.set_status(
+            format!(
+                "AI edit preview in editor: {} · +{} −{} — Alt+A accept · Alt+R reject · Esc dismiss",
+                diff.path.display(),
+                diff.added(),
+                diff.removed()
+            ),
+            MessageKind::Info,
+        );
     }
 
     pub(super) fn rebuild_modal_entries(&mut self, modal: &mut ModalState) {
@@ -146,12 +174,14 @@ impl App {
             ModalKind::GlobalSearch => {
                 // Entries are filled asynchronously by `SearchResults`.
             }
+            ModalKind::OpenFolder => {
+                modal.entries = folder_entries(&modal.query);
+            }
             ModalKind::PermissionPrompt
             | ModalKind::AiPrompt
             | ModalKind::BufferSearch
             | ModalKind::Rename
             | ModalKind::NewFile
-            | ModalKind::OpenFolder
             | ModalKind::BranchPicker
             | ModalKind::DiffPreview => {}
         }
@@ -164,32 +194,14 @@ impl App {
     }
 
     pub(super) async fn handle_modal_key(&mut self, key: KeyEvent) {
-        let Some(mut modal) = self.state.active_modal.take() else {
+        let Some(mut modal) = self.state.modal_state.take() else {
             return;
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         if modal.kind == ModalKind::DiffPreview {
-            let line_count = self
-                .state
-                .diff_preview
-                .as_ref()
-                .map(|diff| diff.lines.len())
-                .unwrap_or(0);
-            match key.code {
-                KeyCode::Esc => return,
-                KeyCode::Up => modal.selected = modal.selected.saturating_sub(1),
-                KeyCode::Down => {
-                    modal.selected = (modal.selected + 1).min(line_count.saturating_sub(1));
-                }
-                KeyCode::PageUp => modal.selected = modal.selected.saturating_sub(10),
-                KeyCode::PageDown => {
-                    modal.selected = (modal.selected + 10).min(line_count.saturating_sub(1));
-                }
-                _ => {}
-            }
-            self.state.active_modal = Some(modal);
+            self.handle_inline_diff_key(key).await;
             return;
         }
 
@@ -207,19 +219,36 @@ impl App {
                 }
                 return;
             }
-            self.state.active_modal = Some(modal);
+            self.state.modal_state = Some(modal);
             return;
         }
 
         match key.code {
             KeyCode::Esc => return,
+            KeyCode::Tab => {
+                if modal.kind == ModalKind::OpenFolder {
+                    if let Some(entry) = modal.selected_entry() {
+                        if let ModalAction::OpenFolder(path) = &entry.action {
+                            let mut completed = path.display().to_string();
+                            if path.is_dir() && !completed.ends_with(std::path::MAIN_SEPARATOR) {
+                                completed.push(std::path::MAIN_SEPARATOR);
+                            }
+                            modal.query = completed;
+                            self.rebuild_modal_entries(&mut modal);
+                            self.state.modal_state = Some(modal);
+                            return;
+                        }
+                    }
+                    return;
+                }
+            }
             KeyCode::Enter => {
                 let kind = modal.kind;
                 let query = modal.query.clone();
                 let action = modal.selected_entry().map(|entry| entry.action.clone());
                 if kind == ModalKind::GlobalSearch && action.is_none() {
                     modal.busy = true;
-                    self.state.active_modal = Some(modal);
+                    self.state.modal_state = Some(modal);
                     self.start_project_search(&query);
                     return;
                 }
@@ -232,20 +261,16 @@ impl App {
             KeyCode::Char('n') if ctrl => modal.select_next(),
             KeyCode::Backspace => {
                 modal.query.pop();
-                if modal.kind != ModalKind::GlobalSearch {
-                    self.rebuild_modal_entries(&mut modal);
-                }
+                self.rebuild_modal_entries(&mut modal);
             }
             KeyCode::Char(ch) if !ctrl && !alt => {
                 modal.query.push(ch);
-                if modal.kind != ModalKind::GlobalSearch {
-                    self.rebuild_modal_entries(&mut modal);
-                }
+                self.rebuild_modal_entries(&mut modal);
             }
             _ => {}
         }
 
-        self.state.active_modal = Some(modal);
+        self.state.modal_state = Some(modal);
     }
 
     async fn activate_modal(
@@ -295,10 +320,21 @@ impl App {
             ModalKind::BufferSearch => self.apply_buffer_search(&query),
             ModalKind::Rename => self.rename_selected(&query),
             ModalKind::NewFile => self.create_file(&query),
-            ModalKind::OpenFolder => self.open_folder_from_query(&query),
+            ModalKind::OpenFolder => {
+                if let Some(action) = action {
+                    match action {
+                        ModalAction::OpenFolder(path) => {
+                            self.open_folder_from_query(&path.display().to_string())
+                        }
+                        _ => self.open_folder_from_query(&query),
+                    }
+                } else {
+                    self.open_folder_from_query(&query);
+                }
+            }
             ModalKind::BranchPicker => match action {
                 Some(ModalAction::SwitchBranch(branch)) => self.switch_branch(&branch),
-                Some(ModalAction::OpenFolder) => self.open_modal(ModalKind::OpenFolder),
+                Some(ModalAction::OpenFolder(_)) => self.open_modal(ModalKind::OpenFolder),
                 _ => {}
             },
             ModalKind::DiffPreview => {}
@@ -318,15 +354,122 @@ impl App {
     fn start_project_search(&mut self, query: &str) {
         let query = query.trim().to_string();
         if query.is_empty() {
-            if let Some(modal) = self.state.active_modal.as_mut() {
+            if let Some(modal) = self.state.modal_state.as_mut() {
                 modal.busy = false;
             }
             return;
         }
-        if let Some(modal) = self.state.active_modal.as_mut() {
+        if let Some(modal) = self.state.modal_state.as_mut() {
             modal.busy = true;
         }
         self.spawn_search(query);
+    }
+
+    /// Accept, reject, and navigate the inline diff. The old separate modal
+    /// is gone: it only set this same inline preview and the overlay never
+    /// rendered it, which is exactly the detach the user reported.
+    pub(super) async fn handle_inline_diff_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let Some(inline_diff) = self.state.inline_diff.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.state.inline_diff = None;
+                self.state
+                    .set_status("AI edit preview dismissed", MessageKind::Info);
+            }
+            KeyCode::Up => {
+                inline_diff.selected = inline_diff.selected.saturating_sub(1);
+                self.state.modal_state = None;
+            }
+            KeyCode::Down => {
+                inline_diff.selected =
+                    (inline_diff.selected + 1).min(inline_diff.rows.len().saturating_sub(1));
+                self.state.modal_state = None;
+            }
+            KeyCode::PageUp => {
+                inline_diff.selected = inline_diff.selected.saturating_sub(10);
+                self.state.modal_state = None;
+            }
+            KeyCode::PageDown => {
+                inline_diff.selected =
+                    (inline_diff.selected + 10).min(inline_diff.rows.len().saturating_sub(1));
+                self.state.modal_state = None;
+            }
+            KeyCode::Char('a') if alt => self.accept_inline_diff(),
+            KeyCode::Char('r') if alt => self.reject_inline_diff(),
+            KeyCode::Enter if ctrl => self.accept_inline_diff(),
+            _ => {
+                self.state.modal_state = None;
+            }
+        }
+    }
+
+    /// Splice the preview's added lines into the open document.
+    pub(super) fn accept_inline_diff(&mut self) {
+        let (path, replacement) = match (&self.state.diff_preview, &self.state.inline_diff) {
+            (Some(diff), Some(inline_diff)) => {
+                let mut replacement = String::new();
+                for row in inline_diff.rows.iter().flatten() {
+                    if row.kind != crate::ai::DiffLineKind::Removed {
+                        replacement.push_str(&row.text);
+                        replacement.push('\n');
+                    }
+                }
+                (diff.path.clone(), replacement)
+            }
+            _ => {
+                self.state
+                    .set_status("No AI edit preview to accept", MessageKind::Warning);
+                return;
+            }
+        };
+        if self.open_preview_target(&path) {
+            if let Some(document) = self.state.active_doc_mut() {
+                let end = document.rope.len_chars();
+                let _ = document.replace_ranges(
+                    &[(0, end, replacement)],
+                    crate::editor::history::EditKind::Replace,
+                );
+                self.state.inline_diff = None;
+                self.note_edit();
+                self.state.set_status(
+                    format!("Applied AI edit to {}", path.display()),
+                    MessageKind::Info,
+                );
+            }
+        }
+    }
+
+    /// Drop the preview without touching the buffer.
+    pub(super) fn reject_inline_diff(&mut self) {
+        if self.state.inline_diff.is_none() {
+            self.state
+                .set_status("No AI edit preview to reject", MessageKind::Warning);
+            return;
+        }
+        self.state.inline_diff = None;
+        self.state
+            .set_status("Rejected AI edit preview", MessageKind::Info);
+    }
+
+    fn open_preview_target(&mut self, path: &std::path::Path) -> bool {
+        if let Some(index) = self.state.document_index(path) {
+            self.state.workspace.switch_to(index);
+            self.state.ensure_cursor_visible();
+            return true;
+        }
+        if self.state.open_file(path).is_ok() {
+            self.queue_lsp_current(LspSync::Open);
+            return true;
+        }
+        self.state.set_status(
+            format!("Cannot open preview target {}", path.display()),
+            MessageKind::Error,
+        );
+        false
     }
 
     /// Run project search for the left Search sidebar.
@@ -482,18 +625,18 @@ impl App {
                 .set_status("Enter a folder path", MessageKind::Warning);
             return;
         };
+        self.open_folder_path(&path);
+    }
+
+    pub(super) fn open_folder_path(&mut self, path: &Path) {
         if !path.is_dir() {
             self.state.set_status(
                 format!("Not a directory: {}", path.display()),
                 MessageKind::Error,
             );
-            self.open_modal(ModalKind::OpenFolder);
-            if let Some(modal) = self.state.active_modal.as_mut() {
-                modal.query = query.to_string();
-            }
             return;
         }
-        match self.state.switch_workspace(&path) {
+        match self.state.switch_workspace(path) {
             Ok(()) => {
                 self.lsp_generation = self.lsp_generation.wrapping_add(1);
                 self.acp_generation = self.acp_generation.wrapping_add(1);
@@ -508,14 +651,9 @@ impl App {
                     MessageKind::Info,
                 );
             }
-            Err(error) => {
-                self.state
-                    .set_status(format!("Open folder failed: {error}"), MessageKind::Error);
-                self.open_modal(ModalKind::OpenFolder);
-                if let Some(modal) = self.state.active_modal.as_mut() {
-                    modal.query = query.to_string();
-                }
-            }
+            Err(error) => self
+                .state
+                .set_status(format!("Open folder failed: {error}"), MessageKind::Error),
         }
     }
 
@@ -537,10 +675,10 @@ impl App {
         modal.entries.push(ModalEntry::new(
             "⌂ Open Folder…",
             "switch project root",
-            ModalAction::OpenFolder,
+            ModalAction::OpenFolder(self.state.workspace.root().to_path_buf()),
         ));
         modal.busy = true;
-        self.state.active_modal = Some(modal);
+        self.state.modal_state = Some(modal);
 
         let root = self.state.workspace.root().to_path_buf();
         let sender = self.event_tx.clone();
@@ -621,5 +759,146 @@ impl App {
             ),
         }
         self.state.focus_ai();
+    }
+}
+
+fn folder_entries(query: &str) -> Vec<ModalEntry> {
+    let (base, prefix) = split_folder_query(query);
+    let mut dirs = list_dirs(&base);
+    if !prefix.is_empty() {
+        let lowered = prefix.to_ascii_lowercase();
+        dirs.retain(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.to_ascii_lowercase().starts_with(&lowered))
+        });
+    }
+    dirs.sort_by_key(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    });
+    dirs.truncate(200);
+
+    let mut entries = Vec::new();
+    if let Some(parent) = base.parent() {
+        if parent != base {
+            entries.push(ModalEntry::new(
+                "… (parent)",
+                parent.display().to_string(),
+                ModalAction::OpenFolder(parent.to_path_buf()),
+            ));
+        }
+    }
+    for path in dirs {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        entries.push(ModalEntry::new(
+            format!("▸ {name}"),
+            path.display().to_string(),
+            ModalAction::OpenFolder(path),
+        ));
+    }
+    entries
+}
+
+/// Split a folder query into the directory to list and the name prefix being
+/// typed, mirroring shell tab-completion behavior.
+fn split_folder_query(query: &str) -> (PathBuf, String) {
+    let trimmed = query.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return (current_dir_fallback(), String::new());
+    }
+    let expanded = expand_folder_tilde(trimmed);
+    let path = PathBuf::from(&expanded);
+    if expanded.ends_with(std::path::MAIN_SEPARATOR) || path.is_dir() {
+        let base = canonicalize_clean(&path).unwrap_or(path);
+        return (base, String::new());
+    }
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            let base = canonicalize_clean(parent).unwrap_or_else(|_| parent.to_path_buf());
+            let prefix = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            (base, prefix)
+        }
+        _ => (current_dir_fallback(), expanded),
+    }
+}
+
+fn expand_folder_tilde(input: &str) -> String {
+    if input == "~" {
+        return PlatformPaths::discover().home_dir().display().to_string();
+    }
+    if let Some(rest) = input.strip_prefix("~/") {
+        return PlatformPaths::discover()
+            .home_dir()
+            .join(rest)
+            .display()
+            .to_string();
+    }
+    input.to_string()
+}
+
+fn current_dir_fallback() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn list_dirs(base: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return dirs;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir()
+            && !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with('.'))
+        {
+            dirs.push(path);
+        }
+    }
+    dirs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_entries_lists_parent_and_children() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("alpha")).expect("mkdir");
+        std::fs::create_dir(dir.path().join("beta")).expect("mkdir");
+        std::fs::write(dir.path().join("file.txt"), "x").expect("write");
+
+        let query = dir.path().display().to_string();
+        let entries = folder_entries(&query);
+        let labels: Vec<String> = entries.iter().map(|entry| entry.label.clone()).collect();
+        assert!(labels.iter().any(|label| label.contains("parent")));
+        assert!(labels.iter().any(|label| label == "▸ alpha"));
+        assert!(labels.iter().any(|label| label == "▸ beta"));
+        assert!(!labels.iter().any(|label| label.contains("file.txt")));
+
+        let (base, prefix) = split_folder_query(&format!("{query}/al"));
+        assert_eq!(
+            base,
+            dir.path()
+                .canonicalize()
+                .unwrap_or_else(|_| dir.path().to_path_buf())
+        );
+        assert_eq!(prefix, "al");
+        let filtered = folder_entries(&format!("{query}/al"));
+        assert!(filtered.iter().any(|entry| entry.label == "▸ alpha"));
+        assert!(!filtered.iter().any(|entry| entry.label == "▸ beta"));
     }
 }

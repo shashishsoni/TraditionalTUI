@@ -23,8 +23,12 @@ impl App {
             self.state.quit_armed = false;
         }
 
-        if self.state.active_modal.is_some() {
+        if self.state.modal_state.is_some() {
             self.handle_modal_key(key).await;
+            return;
+        }
+        if self.state.inline_diff.is_some() && inline_diff_key(key) {
+            self.handle_inline_diff_key(key).await;
             return;
         }
         if self.state.mode == EditMode::Command {
@@ -372,7 +376,7 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
-        if self.state.active_modal.is_some() {
+        if self.state.modal_state.is_some() {
             return;
         }
         let regions = compute(
@@ -944,6 +948,17 @@ impl App {
 
 pub(super) fn is_char(code: KeyCode, target: char) -> bool {
     matches!(code, KeyCode::Char(ch) if ch.eq_ignore_ascii_case(&target))
+}
+
+/// Keys reserved for the inline AI diff when no modal is open.
+fn inline_diff_key(key: KeyEvent) -> bool {
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    matches!(
+        key.code,
+        KeyCode::Esc | KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
+    ) || (alt && matches!(key.code, KeyCode::Char('a') | KeyCode::Char('r')))
+        || (ctrl && matches!(key.code, KeyCode::Enter))
 }
 
 /// Encode a key event into xterm VT sequences for PTY passthrough.
