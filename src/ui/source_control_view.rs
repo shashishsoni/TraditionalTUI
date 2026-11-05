@@ -56,31 +56,36 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " b branch · r ",
+                " s stage · u unstage · b branch · r refresh ",
                 Style::default().fg(theme.ui.dim),
             ))),
             footer,
         );
     }
 
-    let branch = state
-        .git
-        .as_ref()
-        .and_then(|git| git.branch())
-        .unwrap_or("no branch");
+    let badges = state.source_control_badges();
+    let branch = state.git.as_ref().map(|git| git.branch_short());
     let branch_color = if state.git.is_some() {
         theme.ui.hint
     } else {
         theme.ui.dim
     };
+    let staged_count = badges
+        .values()
+        .filter(|badge| badge.starts_with('S'))
+        .count();
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("⑂ ", Style::default().fg(branch_color)),
             Span::styled(
-                branch.to_string(),
+                branch.unwrap_or_else(|| "no repo".to_string()),
                 Style::default()
                     .fg(theme.ui.foreground)
                     .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {staged_count} staged"),
+                Style::default().fg(theme.ui.dim),
             ),
         ])),
         Rect::new(content.x, inner.y, content.width, 1),
@@ -135,7 +140,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         let display = relative_display(state.workspace.root(), path);
         let mut line = Line::from(vec![
             Span::styled(
-                format!("{badge} "),
+                format!("{badge:>5} "),
                 Style::default()
                     .fg(git_color(*status, state))
                     .add_modifier(Modifier::BOLD),

@@ -393,17 +393,28 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
     let theme = &state.theme;
     frame.render_widget(Clear, area);
     let buffer = frame.buffer_mut();
-    buffer.set_style(area, Style::default().bg(theme.ui.status_bg));
-    let mut x = area.x + 1;
+    buffer.set_style(area, Style::default().bg(theme.ui.tab_bar_bg));
+
+    let hint = "F1 help · Ctrl+Space commands";
+    let hint_width = hint.chars().count() as u16;
+    let limit = area.right().saturating_sub(hint_width + 2);
+    let mut x = area.x;
     let active = state.workspace.active_index();
-    let hint = "F1 help · Ctrl+Space commands ";
-    let reserved = hint.chars().count() as u16;
-    let limit = area.right().saturating_sub(reserved);
+    let mut drawn = 0usize;
+    let mut skipped = 0usize;
 
     for (index, document) in state.workspace.documents().iter().enumerate() {
         let dirty = if document.dirty { " ●" } else { "" };
         let label = format!(" {}{dirty} ✕ ", document.display_name());
-        let mut style = if Some(index) == active {
+        let width = label.chars().count() as u16;
+        if x + width + 1 >= limit {
+            if Some(index) == active {
+                continue;
+            }
+            skipped += 1;
+            continue;
+        }
+        let style = if Some(index) == active {
             Style::default()
                 .fg(theme.ui.cursor_fg)
                 .bg(theme.ui.accent)
@@ -411,38 +422,44 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
         } else {
             Style::default()
                 .fg(theme.ui.tab_inactive)
-                .bg(theme.ui.status_bg)
+                .bg(theme.ui.tab_bar_bg)
         };
-        if Some(index) == active && state.focus == FocusTarget::Editor {
-            style = style.add_modifier(Modifier::UNDERLINED);
-        }
-        let mut wrote = false;
         for ch in label.chars() {
+            put(buffer, area, x, area.y, &ch.to_string(), style);
+            x += 1;
+        }
+        if Some(index) == active {
+            put(
+                buffer,
+                area,
+                x,
+                area.y,
+                "▂",
+                Style::default().fg(theme.ui.accent),
+            );
+        }
+        x += 1;
+        drawn += 1;
+    }
+
+    if skipped > 0 && x < limit {
+        let overflow = format!(" +{skipped} ");
+        for ch in overflow.chars() {
             if x >= limit {
                 break;
             }
-            put(buffer, area, x, area.y, &ch.to_string(), style);
+            put(
+                buffer,
+                area,
+                x,
+                area.y,
+                &ch.to_string(),
+                Style::default().fg(theme.ui.dim),
+            );
             x += 1;
-            wrote = true;
         }
-        if x >= limit {
-            break;
-        }
-        if !wrote {
-            break;
-        }
-        put(
-            buffer,
-            area,
-            x,
-            area.y,
-            "│",
-            Style::default().fg(theme.ui.border),
-        );
-        x += 1;
     }
 
-    let hint_width = hint.chars().count() as u16;
     if area.width > hint_width + 4 {
         let hint_x = area.right().saturating_sub(hint_width);
         for (index, ch) in hint.chars().enumerate() {
@@ -456,24 +473,29 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
             );
         }
     }
+    let _ = drawn;
 }
 
 /// Hit-test a click inside the tab bar. Returns `(tab_index, close_clicked)`.
 pub fn tab_hit_at(area: Rect, state: &AppState, x: u16, y: u16) -> Option<(usize, bool)> {
-    if area.height == 0 || y != area.y || x < area.x + 1 {
+    if area.height == 0 || y != area.y || x < area.x {
         return None;
     }
-    let hint = "F1 help · Ctrl+Space commands ";
-    let limit = area.right().saturating_sub(hint.chars().count() as u16);
-    let mut cursor = area.x + 1;
+    let hint = "F1 help · Ctrl+Space commands";
+    let limit = area.right().saturating_sub(hint.chars().count() as u16 + 2);
+    let mut cursor = area.x;
     for (index, document) in state.workspace.documents().iter().enumerate() {
         let dirty = if document.dirty { " ●" } else { "" };
         let label = format!(" {}{dirty} ✕ ", document.display_name());
         let width = label.chars().count() as u16;
-        if x >= cursor && x < cursor + width {
-            if x + 1 >= limit {
-                return None;
+        if cursor + width + 1 >= limit {
+            if Some(index) == state.workspace.active_index() {
+                let _ = document;
+                continue;
             }
+            break;
+        }
+        if x >= cursor && x < cursor + width {
             return Some((index, x + 2 >= cursor + width));
         }
         cursor += width + 1;

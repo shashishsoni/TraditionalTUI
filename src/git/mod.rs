@@ -231,11 +231,6 @@ impl GitRepository {
             if head != staged {
                 marks.extend(diff_marks(&lines_of(head), &lines_of(staged), true));
             }
-        } else if let Some(staged) = staged_file.as_deref() {
-            // New file that is fully staged: every line is an addition.
-            if !staged.is_empty() {
-                marks.extend((0..lines_of(staged).len()).map(|line| (line, LineChange::Added)));
-            }
         }
         if let (Some(base), Some(work)) = (
             staged_file.as_deref().or(head_file.as_deref()),
@@ -525,13 +520,24 @@ impl Staging {
         self.unstaged_additions > 0 || self.unstaged_deletions > 0
     }
 
-    /// Short badge: `M` (unstaged), `M+` (staged), `U` compound states.
+    /// Short badge: `M` (unstaged), `M+` (staged+unstaged), `S`
+    /// (staged only), `U` compound states.
     pub fn badge(self) -> &'static str {
         match (self.has_staged(), self.has_unstaged()) {
             (true, true) => "M+",
             (true, false) => "S",
             (false, true) => "M",
             (false, false) => " ",
+        }
+    }
+
+    /// Bracketed label for the source control panel, e.g. `[S M+/3]`.
+    pub fn detail(self) -> String {
+        match (self.staged_additions, self.unstaged_additions) {
+            (0, 0) => "clean".to_string(),
+            (staged, 0) => format!("staged {staged}"),
+            (0, unstaged) => format!("unstaged {unstaged}"),
+            (staged, unstaged) => format!("staged {staged} + unstaged {unstaged}"),
         }
     }
 }

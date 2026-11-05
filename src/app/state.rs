@@ -830,11 +830,9 @@ impl AppState {
             .statuses()
             .iter()
             .map(|(path, status)| {
-                let badge = badges
-                    .get(path)
-                    .map(|staging| staging.badge().to_string())
-                    .unwrap_or_else(|| status.badge().to_string());
-                (path.clone(), *status, badge)
+                let record = badges.get(path).copied().unwrap_or_default();
+                let badge = format!("{} {}", record.badge(), record.detail());
+                (path.clone(), *status, badge.trim().to_string())
             })
             .collect();
         files.sort_by(|left, right| left.0.cmp(&right.0));

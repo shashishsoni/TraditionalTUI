@@ -118,11 +118,21 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 format!("+{} −{}", diff.added(), diff.removed()),
                 Style::default().fg(theme.ui.dim),
             ),
+            Span::styled(
+                "  d full · y accept · n reject",
+                Style::default().fg(theme.ui.dim),
+            ),
         ]));
         lines.push(Line::from(Span::styled(
             format!(" {}", diff.path.display()),
             Style::default().fg(theme.ui.dim),
         )));
+        if diff.is_empty() {
+            lines.push(Line::from(Span::styled(
+                " No line changes (whitespace or binary)",
+                Style::default().fg(theme.ui.dim),
+            )));
+        }
         let changed: Vec<_> = diff
             .lines
             .iter()

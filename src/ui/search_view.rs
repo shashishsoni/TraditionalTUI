@@ -76,8 +76,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         "[aa]"
     };
     let word_badge = if search.whole_word { "[=]" } else { "[~]" };
-    let status = if search.busy {
-        " searching…".to_string()
+    let status = if search.searching || search.busy {
+        format!(" searching… {case_badge} case {word_badge} word")
     } else if search.query.trim().is_empty() {
         " type a query and press Enter".to_string()
     } else {
@@ -132,11 +132,21 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .take(list_height)
     {
         let path = relative_display(state.workspace.root(), &result.path);
-        let text = format!("{}:{}  {}", path, result.line, result.text.trim());
-        let mut line = Line::from(Span::styled(
-            truncate(&text, content.width as usize),
-            Style::default().fg(theme.ui.foreground),
-        ));
+        let mut line_spans = vec![
+            Span::styled(path, Style::default().fg(theme.ui.hint)),
+            Span::styled(
+                format!(":{}  ", result.line),
+                Style::default().fg(theme.ui.dim),
+            ),
+            Span::styled(
+                result.text.trim().to_string(),
+                Style::default().fg(theme.ui.foreground),
+            ),
+        ];
+        if index == selected {
+            line_spans.push(Span::styled(" ◀", Style::default().fg(theme.ui.accent)));
+        }
+        let mut line = Line::from(line_spans);
         if index == selected {
             line = line.style(Style::default().bg(theme.ui.selection));
         }
@@ -171,14 +181,17 @@ pub fn is_input_row(area: Rect, row: u16) -> bool {
     Block::bordered().inner(area).y == row
 }
 
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_hit_test_accounts_for_scrolling() {
+        let area = Rect::new(10, 5, 80, 20);
+        // inner.y = 6, list starts at 8.
+        assert_eq!(result_index_at(area, 8, 0, 3), Some(0));
+        assert_eq!(result_index_at(area, 9, 1, 3), Some(1));
+        assert_eq!(result_index_at(area, 6, 0, 3), None);
+        assert_eq!(result_index_at(area, 40, 0, 3), None);
     }
-    if width == 0 {
-        return String::new();
-    }
-    let mut truncated: String = text.chars().take(width.saturating_sub(1)).collect();
-    truncated.push('…');
-    truncated
 }

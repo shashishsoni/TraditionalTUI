@@ -100,11 +100,16 @@ fn compose(state: &AppState) -> (Vec<Span<'static>>, Option<(u16, u16)>) {
             .map(|span| span.content.chars().count() as u16)
             .sum::<u16>();
         let (git_text, git_color) = match &state.git {
-            Some(git) => match git.branch() {
-                Some(branch) if !git.is_detached() => (format!("│ ⑂ {branch} "), theme.ui.hint),
-                Some(branch) => (format!("│ ⑂⌖ {branch} "), theme.ui.warning),
-                None => ("│ ◇ open folder ".to_string(), theme.ui.dim),
-            },
+            Some(git) => {
+                let count = state.source_control_files().len();
+                match git.branch() {
+                    Some(branch) if !git.is_detached() => {
+                        (format!("│ ⑂ {branch} {count}Δ "), theme.ui.hint)
+                    }
+                    Some(branch) => (format!("│ ⑂⌖ {branch} {count}Δ "), theme.ui.warning),
+                    None => ("│ ◇ open folder ".to_string(), theme.ui.dim),
+                }
+            }
             None => ("│ ◇ open folder ".to_string(), theme.ui.dim),
         };
         let end = start + git_text.chars().count() as u16;
