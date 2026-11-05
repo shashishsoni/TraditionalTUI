@@ -14,13 +14,13 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     };
     let theme = &state.theme;
-    let width = area.width.saturating_sub(4).min(84);
+    let width = area.width.saturating_sub(6).min(88);
     let height = match modal.kind {
-        ModalKind::Help => area.height.saturating_sub(4).min(22),
-        ModalKind::PermissionPrompt => area.height.saturating_sub(4).min(18),
-        _ => area.height.saturating_sub(4).min(18),
+        ModalKind::Help => area.height.saturating_sub(6).min(24),
+        ModalKind::PermissionPrompt => area.height.saturating_sub(6).min(18),
+        _ => area.height.saturating_sub(6).min(20),
     };
-    if width < 12 || height < 4 {
+    if width < 20 || height < 6 {
         return;
     }
     let popup = Rect::new(
@@ -45,15 +45,38 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .buffer_mut()
         .set_style(inner, Style::default().bg(theme.ui.panel_bg));
 
-    if inner.height == 0 || inner.width == 0 {
+    if inner.height < 2 || inner.width < 2 {
         return;
     }
 
+    let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+    let body = Rect::new(
+        inner.x + 1,
+        inner.y,
+        inner.width.saturating_sub(2),
+        inner.height.saturating_sub(2),
+    );
+
+    let footer_text = match modal.kind {
+        ModalKind::PermissionPrompt => " y allow · a allow always · n reject · Esc cancel",
+        ModalKind::GlobalSearch => " Enter search · ↑↓ select · Esc close",
+        ModalKind::AiPrompt => " Enter send · Esc cancel",
+        ModalKind::Rename | ModalKind::NewFile => " Enter confirm · Esc cancel",
+        _ => " ↑↓ select · Enter confirm · Esc close",
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            footer_text,
+            Style::default().fg(theme.ui.dim),
+        ))),
+        footer,
+    );
+
     match modal.kind {
-        ModalKind::PermissionPrompt => render_permission(frame, inner, modal, state),
-        ModalKind::Help => render_list(frame, inner, modal, state, false),
+        ModalKind::PermissionPrompt => render_permission(frame, body, modal, state),
+        ModalKind::Help => render_list(frame, body, modal, state),
         _ => {
-            let mut y = inner.y;
+            let mut y = body.y;
             if modal.kind.has_input() {
                 let prefix = match modal.kind {
                     ModalKind::GlobalSearch => "regex ",
@@ -78,40 +101,34 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 ]);
                 frame.render_widget(
                     Paragraph::new(line).style(Style::default().bg(theme.ui.panel_bg)),
-                    Rect::new(inner.x, y, inner.width, 1),
+                    Rect::new(body.x, y, body.width, 1),
                 );
                 y += 1;
                 if modal.busy {
                     frame.render_widget(
                         Paragraph::new(Line::from(Span::styled(
-                            " searching…",
+                            "searching…",
                             Style::default().fg(theme.ui.dim),
                         ))),
-                        Rect::new(inner.x, y, inner.width, 1),
+                        Rect::new(body.x, y, body.width, 1),
                     );
                     return;
                 }
                 let list_area = Rect::new(
-                    inner.x,
+                    body.x,
                     y,
-                    inner.width,
-                    inner.height.saturating_sub(y - inner.y),
+                    body.width,
+                    body.height.saturating_sub(y.saturating_sub(body.y)),
                 );
-                render_list(frame, list_area, modal, state, true);
+                render_list(frame, list_area, modal, state);
             } else {
-                render_list(frame, inner, modal, state, true);
+                render_list(frame, body, modal, state);
             }
         }
     }
 }
 
-fn render_list(
-    frame: &mut Frame,
-    area: Rect,
-    modal: &ModalState,
-    state: &AppState,
-    _with_input: bool,
-) {
+fn render_list(frame: &mut Frame, area: Rect, modal: &ModalState, state: &AppState) {
     if area.height == 0 {
         return;
     }
@@ -120,9 +137,9 @@ fn render_list(
         let hint = match modal.kind {
             ModalKind::GlobalSearch => " type a regex and press Enter",
             ModalKind::CommandPalette => " no matching commands",
-            ModalKind::FileFinder => " no matching files",
+            ModalKind::FileFinder => " no matching files (indexing…)",
             ModalKind::ThemeSelector => " no themes",
-            ModalKind::AgentPicker => " no installed ACP agents",
+            ModalKind::AgentPicker => " no ACP agents found — F4 opens config",
             _ => "",
         };
         frame.render_widget(
@@ -136,7 +153,7 @@ fn render_list(
     }
 
     let height = area.height as usize;
-    let start = modal.selected.saturating_sub(height.saturating_sub(1));
+    let start = modal.selected.saturating_sub(height / 2);
     let mut lines = Vec::new();
     for (index, entry) in modal.entries.iter().enumerate().skip(start).take(height) {
         let selected = index == modal.selected;
@@ -153,11 +170,7 @@ fn render_list(
             ),
         ]);
         if selected {
-            line = line.style(
-                Style::default()
-                    .bg(theme.ui.selection)
-                    .add_modifier(Modifier::BOLD),
-            );
+            line = line.style(Style::default().bg(theme.ui.selection));
         }
         lines.push(line);
     }
@@ -171,7 +184,7 @@ fn render_permission(frame: &mut Frame, area: Rect, modal: &ModalState, state: &
     };
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
-        format!(" {}", prompt.summary()),
+        prompt.summary(),
         Style::default()
             .fg(theme.ui.warning)
             .add_modifier(Modifier::BOLD),
@@ -186,7 +199,7 @@ fn render_permission(frame: &mut Frame, area: Rect, modal: &ModalState, state: &
         };
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  [{key}] "),
+                format!("[{key}] "),
                 Style::default()
                     .fg(theme.ui.accent)
                     .add_modifier(Modifier::BOLD),
@@ -197,10 +210,5 @@ fn render_permission(frame: &mut Frame, area: Rect, modal: &ModalState, state: &
             ),
         ]));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  y allow once · a allow for session · n reject · Esc cancel",
-        Style::default().fg(theme.ui.dim),
-    )));
     frame.render_widget(Paragraph::new(lines), area);
 }

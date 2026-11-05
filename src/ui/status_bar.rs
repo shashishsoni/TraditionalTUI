@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::state::{AppState, EditMode};
+use crate::app::state::{AppState, EditMode, FocusTarget};
 use crate::ui::bottom_panel::message_color;
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -59,6 +59,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             format!(" {name} "),
             Style::default().fg(theme.ui.foreground),
         ));
+        spans.push(Span::styled(
+            format!("│ {} ", focus_label(state)),
+            Style::default().fg(theme.ui.dim),
+        ));
 
         if let Some(git) = &state.git {
             if let Some(branch) = git.branch() {
@@ -81,16 +85,30 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             }),
         ));
 
-        if state.acp.agent_name().is_some() {
-            spans.push(Span::styled(
-                format!(
-                    "│ ACP: {} ({}) ",
-                    state.acp.agent_name().unwrap_or("agent"),
-                    state.acp.state().label()
-                ),
-                Style::default().fg(theme.ui.success),
-            ));
-        }
+        let acp = match state.acp.agent_name() {
+            Some(agent) => format!("ACP {agent} · {}", state.acp.state().label()),
+            None => "ACP off".to_string(),
+        };
+        let ai = match state.ai.provider_name() {
+            Some(provider) => format!("AI {provider}"),
+            None => "AI off".to_string(),
+        };
+        spans.push(Span::styled(
+            format!("│ {acp} "),
+            Style::default().fg(if state.acp.is_connected() {
+                theme.ui.success
+            } else {
+                theme.ui.dim
+            }),
+        ));
+        spans.push(Span::styled(
+            format!("│ {ai} "),
+            Style::default().fg(if state.ai.is_configured() {
+                theme.ui.hint
+            } else {
+                theme.ui.dim
+            }),
+        ));
     }
 
     if let Some(pending) = state.pending {
@@ -116,4 +134,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)).style(background), area);
+}
+
+fn focus_label(state: &AppState) -> &'static str {
+    match state.focus {
+        FocusTarget::Explorer => "EXPLORER",
+        FocusTarget::Editor => "EDITOR",
+        FocusTarget::Bottom(crate::app::state::BottomTab::Terminal) => "TERMINAL",
+        FocusTarget::Bottom(crate::app::state::BottomTab::Problems) => "PROBLEMS",
+        FocusTarget::Bottom(crate::app::state::BottomTab::Output) => "OUTPUT",
+        FocusTarget::Bottom(crate::app::state::BottomTab::AcpLogs) => "ACP LOGS",
+        FocusTarget::Ai => "AI",
+    }
 }

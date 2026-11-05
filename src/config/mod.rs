@@ -17,6 +17,60 @@ pub use loader::{ConfigError, load, load_from, workspace_config_path};
 /// Default global theme name.
 pub const DEFAULT_THEME: &str = "tokyonight";
 
+/// Starter configuration written by `:config` when no user config exists.
+pub const CONFIG_TEMPLATE: &str = r#"# ttui configuration. Every section is optional.
+# Global file: ~/.config/ttui/config.toml
+# Workspace file: <project>/.ttui/config.toml
+
+[editor]
+tab_width = 4
+expand_tab = true
+line_numbers = true
+relative_line_numbers = false
+scroll_off = 4
+auto_save = false
+format_on_save = false
+
+[ui]
+theme = "tokyonight" # tokyonight | catppuccin-mocha | gruvbox-dark | one-dark-pro | catppuccin-latte
+left_width = 28
+right_width = 38
+bottom_height = 12
+show_left_sidebar = true
+show_right_sidebar = true
+show_bottom_panel = true
+mouse = true
+# truecolor = true
+
+[terminal]
+# shell = "/bin/zsh"
+scrollback = 10000
+
+[ai]
+enabled = false
+# default_provider = "openai"
+# model = "gpt-4o-mini"
+
+# [ai.providers.openai]
+# endpoint = "https://api.openai.com/v1"
+# env_var = "OPENAI_API_KEY"
+
+[lsp]
+enabled = true
+
+# [lsp.servers.rust-analyzer]
+# command = "rust-analyzer"
+# languages = ["rust"]
+
+[acp]
+enabled = true
+trusted_only = true
+
+# [acp.agents.my-agent]
+# command = "my-agent"
+# args = ["acp"]
+"#;
+
 /// Keymap preset selected by the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

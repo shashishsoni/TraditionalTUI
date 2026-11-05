@@ -30,14 +30,15 @@ OPTIONS:
 
 KEYS:
     i / Esc        insert / normal mode
-    Ctrl+Shift+P   command palette
+    Ctrl+Space     command palette
     Ctrl+P         go to file
+    Ctrl+T         open terminal (Ctrl+Space to leave shell)
+    Ctrl+G         connect an ACP agent
+    Ctrl+O         open configuration
     Ctrl+Shift+F   project search
     Ctrl+F         buffer search
-    Ctrl+J         bottom panel
     Ctrl+B         explorer
     Ctrl+Alt+B     AI sidebar
-    Ctrl+W h/j/k/l zooms between panels
     Ctrl+Q         quit (twice when dirty)
     F1             keymap help
 ";

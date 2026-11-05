@@ -319,6 +319,10 @@ impl App {
                 self.state
                     .set_status(format!("Theme: {}", name.label()), MessageKind::Info);
             }
+            "config" | "settings" => self.open_config(),
+            "keys" | "commands" => self.open_modal(ModalKind::Help),
+            "agents" | "connect" => self.open_modal(ModalKind::AgentPicker),
+            "new" => self.open_modal(ModalKind::NewFile),
             "acp" => self.execute_acp_command(argument).await,
             "term" | "terminal" => {
                 if let Err(error) = self.state.spawn_terminal() {
@@ -330,8 +334,9 @@ impl App {
             "trust" => self.grant_trust(),
             "git" => self.spawn_git_refresh(),
             "ai" => {
+                self.state.focus_ai();
                 if argument.is_empty() {
-                    self.state.focus_ai();
+                    self.open_modal(ModalKind::AiPrompt);
                 } else {
                     self.submit_prompt(argument.to_string());
                 }
@@ -389,8 +394,15 @@ impl App {
             Action::Quit => self.attempt_quit(),
             Action::Help => self.open_modal(ModalKind::Help),
             Action::ToggleExplorer => self.state.toggle_explorer(),
-            Action::ToggleBottom => self.state.toggle_bottom(),
-            Action::ToggleAi => self.state.toggle_ai(),
+            Action::ToggleBottom => self.toggle_bottom_panel(),
+            Action::ToggleAi => {
+                self.state.toggle_ai();
+                if self.state.layout.right_visible {
+                    self.state.focus_ai();
+                } else {
+                    self.state.focus_editor();
+                }
+            }
             Action::Zoom => self.state.toggle_zoom(),
             Action::FileFinder => self.open_modal(ModalKind::FileFinder),
             Action::CommandPalette => self.open_modal(ModalKind::CommandPalette),
@@ -448,7 +460,56 @@ impl App {
                     }
                 }
             }
+            Action::ConnectAgent => self.open_modal(ModalKind::AgentPicker),
+            Action::OpenConfig => self.open_config(),
         }
+    }
+
+    fn toggle_bottom_panel(&mut self) {
+        if self.state.layout.bottom_visible {
+            self.state.toggle_bottom();
+            return;
+        }
+        self.state.bottom_tab = BottomTab::Terminal;
+        self.state.layout.bottom_visible = true;
+        self.state.focus_bottom(BottomTab::Terminal);
+        if self.state.terminal.is_empty() {
+            if let Err(error) = self.state.spawn_terminal() {
+                self.state
+                    .set_status(format!("Terminal failed: {error}"), MessageKind::Error);
+            }
+        }
+    }
+
+    fn open_config(&mut self) {
+        let paths = crate::platform::paths::PlatformPaths::discover();
+        if let Err(error) = paths.ensure_dirs() {
+            self.state
+                .set_status(format!("Config dir failed: {error}"), MessageKind::Error);
+            return;
+        }
+        let path = paths.config_dir().join("config.toml");
+        if !path.exists() {
+            if let Err(error) =
+                crate::platform::fs::atomic_write(&path, crate::config::CONFIG_TEMPLATE.as_bytes())
+            {
+                self.state
+                    .set_status(format!("Config write failed: {error}"), MessageKind::Error);
+                return;
+            }
+        }
+        if let Err(error) = self.state.open_file(&path) {
+            self.state
+                .set_status(format!("Config open failed: {error}"), MessageKind::Error);
+            return;
+        }
+        self.state.set_status(
+            format!(
+                "Configuration: {} — save and restart to apply",
+                path.display()
+            ),
+            MessageKind::Info,
+        );
     }
 
     fn undo(&mut self) {

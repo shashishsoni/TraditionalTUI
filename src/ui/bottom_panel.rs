@@ -25,43 +25,50 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     frame
         .buffer_mut()
         .set_style(inner, Style::default().bg(theme.ui.panel_bg));
-    if inner.height == 0 {
+    if inner.height == 0 || inner.width == 0 {
         return;
     }
 
+    let tabs_area = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), 1);
     let titles: Vec<Line> = BottomTab::ALL
         .iter()
-        .map(|tab| {
-            let active = *tab == state.bottom_tab;
-            Line::from(Span::styled(
-                format!(" {} ", tab.label()),
-                Style::default()
-                    .fg(if active {
-                        theme.ui.accent
-                    } else {
-                        theme.ui.dim
-                    })
-                    .add_modifier(if active {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
-            ))
-        })
+        .map(|tab| Line::from(Span::styled(format!(" {} ", tab.label()), Style::default())))
         .collect();
-    let tabs_area = Rect::new(inner.x, inner.y, inner.width, 1);
     frame.render_widget(
         Tabs::new(titles)
             .select(state.bottom_tab.index())
-            .style(Style::default().bg(theme.ui.panel_bg))
-            .divider(Span::raw(" ")),
+            .style(Style::default().fg(theme.ui.dim).bg(theme.ui.panel_bg))
+            .highlight_style(
+                Style::default()
+                    .fg(theme.ui.cursor_fg)
+                    .bg(theme.ui.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .divider(Span::styled(" ", Style::default().fg(theme.ui.dim))),
         tabs_area,
     );
 
+    let hint = if state.bottom_tab == BottomTab::Terminal {
+        "Ctrl+T new · Ctrl+Space navigate "
+    } else {
+        "1-4 switch · Ctrl+T terminal "
+    };
+    let hint_width = hint.chars().count() as u16;
+    if tabs_area.width > hint_width + 24 {
+        let hint_x = tabs_area.right().saturating_sub(hint_width);
+        let buffer = frame.buffer_mut();
+        for (index, ch) in hint.chars().enumerate() {
+            if let Some(cell) = buffer.cell_mut((hint_x + index as u16, tabs_area.y)) {
+                cell.set_symbol(&ch.to_string());
+                cell.set_style(Style::default().fg(theme.ui.dim));
+            }
+        }
+    }
+
     let content = Rect::new(
-        inner.x,
+        inner.x + 1,
         inner.y + 1,
-        inner.width,
+        inner.width.saturating_sub(2),
         inner.height.saturating_sub(1),
     );
     if content.height == 0 || content.width == 0 {
@@ -103,7 +110,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             if empty {
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
-                        " no ACP traffic yet",
+                        "no ACP traffic yet",
                         Style::default().fg(theme.ui.dim),
                     ))),
                     content,
@@ -117,10 +124,16 @@ fn render_terminal(frame: &mut Frame, area: Rect, state: &AppState, focused: boo
     let theme = &state.theme;
     let Some(session) = state.terminal.active() else {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                " no terminal — Ctrl+Shift+T or :term to start a shell",
-                Style::default().fg(theme.ui.dim),
-            ))),
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "No shell running",
+                    Style::default().fg(theme.ui.foreground),
+                )),
+                Line::from(Span::styled(
+                    "Press Enter or Ctrl+T to start one",
+                    Style::default().fg(theme.ui.dim),
+                )),
+            ]),
             area,
         );
         return;
@@ -182,7 +195,7 @@ fn render_problems(frame: &mut Frame, area: Rect, state: &AppState) {
     if diagnostics.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " no diagnostics",
+                "No diagnostics",
                 Style::default().fg(theme.ui.dim),
             ))),
             area,

@@ -95,6 +95,19 @@ impl Keymap {
             ("ctrl-v", ids::PASTE),
             ("ctrl-shift-t", ids::NEW_TERMINAL),
             ("f1", ids::HELP),
+            ("f2", ids::CONNECT_AGENT),
+            ("f3", ids::NEW_TERMINAL),
+            ("f4", ids::OPEN_CONFIG),
+            ("ctrl-shift-a", ids::CONNECT_AGENT),
+            ("ctrl-,", ids::OPEN_CONFIG),
+            ("ctrl-space", ids::COMMAND_PALETTE),
+            ("ctrl-t", ids::NEW_TERMINAL),
+            ("ctrl-g", ids::CONNECT_AGENT),
+            ("ctrl-o", ids::OPEN_CONFIG),
+            ("alt-t", ids::NEW_TERMINAL),
+            ("alt-a", ids::CONNECT_AGENT),
+            ("alt-c", ids::OPEN_CONFIG),
+            ("alt-p", ids::COMMAND_PALETTE),
         ];
         for (chord, command) in defaults {
             if let Some(chord) = Chord::parse(chord) {

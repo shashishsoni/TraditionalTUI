@@ -62,3 +62,22 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 cargo bench --no-run
 ```
+
+### First run
+
+`ttui` opens in **INSERT** mode: type immediately, press `Esc` for normal-mode motions.
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Space` | Command palette |
+| `Ctrl+P` | Fuzzy file finder |
+| `Ctrl+T` | Open integrated terminal (`Ctrl+Space` returns to panel navigation) |
+| `Ctrl+G` | Connect an installed ACP agent (Command Code, OpenCode, Gemini, …) |
+| `Ctrl+O` | Create/open `~/.config/ttui/config.toml` |
+| `Ctrl+Shift+F` | Project-wide search |
+| `Ctrl+Q` | Quit (twice when buffers are dirty) |
+| `F1` | Keymap help |
+
+`Ctrl+O` writes a commented starter config on first use. Configure the theme, terminal
+shell, BYOK providers, LSP servers and ACP agents there. Workspace-local
+`.ttui/config.toml` overrides the global file after `:trust`.

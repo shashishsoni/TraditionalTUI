@@ -33,6 +33,8 @@ pub enum Action {
     CloseTerminal,
     FocusAi,
     ReloadFile,
+    ConnectAgent,
+    OpenConfig,
 }
 
 impl Action {
@@ -67,6 +69,8 @@ impl Action {
             ids::CLOSE_TERMINAL => Self::CloseTerminal,
             ids::FOCUS_AI => Self::FocusAi,
             ids::RELOAD_FILE => Self::ReloadFile,
+            ids::CONNECT_AGENT => Self::ConnectAgent,
+            ids::OPEN_CONFIG => Self::OpenConfig,
             _ => return None,
         })
     }

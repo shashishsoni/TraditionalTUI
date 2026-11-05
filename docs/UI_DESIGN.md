@@ -91,10 +91,14 @@ pub enum ModalKind {
 
 ### Focus Routing Rules
 1. **Modal Preemption**: If `active_modal.is_some()`, all keyboard events route exclusively to the active modal (`Esc` closes the modal and restores previous focus).
-2. **Terminal Passthrough**: When `FocusTarget::BottomPanel(BottomTab::Terminal)` is active and in `TerminalInputMode::Passthrough`, all keys (except the escape chord `Ctrl+\` or `Ctrl+W`) are serialized into VT/ANSI bytes and written directly to the active PTY master.
+2. **Terminal Passthrough**: When `FocusTarget::BottomPanel(BottomTab::Terminal)` is active and in `TerminalInputMode::Passthrough`, all keys (except the escape chord `Ctrl+Space`, `Ctrl+\`, or `Ctrl+4`) are serialized into VT/ANSI bytes and written directly to the active PTY master.
 3. **Global Workbench Shortcuts**:
    - `Ctrl+B` / `<Space>e`: Toggle Left File Explorer.
-   - `Ctrl+J` / `` Ctrl+` ``: Toggle Bottom Terminal/Diagnostics Panel.
+   - `Ctrl+J` (where the terminal distinguishes it from Enter): Toggle Bottom Panel.
+   - `Ctrl+T`: Open a new integrated terminal.
+   - `Ctrl+Space`: Open Command Palette; exit terminal passthrough to panel navigation.
+   - `Ctrl+G`: Open the ACP agent picker.
+   - `Ctrl+O`: Create/open the global `config.toml`.
    - `Ctrl+Alt+B` / `<Space>a`: Toggle Right AI / ACP Assistant Panel.
    - `Ctrl+P` / `<Space>f`: Open Fuzzy File Finder.
    - `Ctrl+Shift+P` / `:`: Open Command Palette.

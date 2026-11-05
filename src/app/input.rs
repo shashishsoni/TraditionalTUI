@@ -13,8 +13,14 @@ use super::{App, LspRequest, LspSync};
 
 impl App {
     pub(super) async fn handle_key(&mut self, key: KeyEvent) {
+        tracing::debug!(code = ?key.code, modifiers = ?key.modifiers, "key event");
         if key.kind == crossterm::event::KeyEventKind::Release {
             return;
+        }
+        let ctrl_q =
+            key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('q'));
+        if !ctrl_q {
+            self.state.quit_armed = false;
         }
 
         if self.state.active_modal.is_some() {
@@ -34,9 +40,19 @@ impl App {
             && self.state.terminal.active().is_some()
         {
             if key.modifiers.contains(KeyModifiers::CONTROL)
-                && matches!(key.code, KeyCode::Char('\\'))
+                && matches!(
+                    key.code,
+                    KeyCode::Char('\\')
+                        | KeyCode::Char('4')
+                        | KeyCode::Char('5')
+                        | KeyCode::Char(' ')
+                )
             {
                 self.state.terminal_passthrough = false;
+                self.state.set_status(
+                    "Panel navigation — 1-4 tabs · Enter resume · Esc editor",
+                    MessageKind::Info,
+                );
                 return;
             }
             if let Some(bytes) = encode_key(key) {
@@ -77,6 +93,10 @@ impl App {
         }
         if ctrl && shift && is_char(code, 't') {
             self.execute_action(Action::NewTerminal).await;
+            return true;
+        }
+        if ctrl && shift && is_char(code, 'a') {
+            self.execute_action(Action::ConnectAgent).await;
             return true;
         }
         if ctrl {
@@ -125,8 +145,28 @@ impl App {
                     self.execute_action(Action::Paste).await;
                     return true;
                 }
-                KeyCode::Char('w') => {
+                KeyCode::Char('t') => {
+                    self.execute_action(Action::NewTerminal).await;
+                    return true;
+                }
+                KeyCode::Char('g') => {
+                    self.execute_action(Action::ConnectAgent).await;
+                    return true;
+                }
+                KeyCode::Char('o') => {
+                    self.execute_action(Action::OpenConfig).await;
+                    return true;
+                }
+                KeyCode::Char('w') if self.state.mode != EditMode::Insert => {
                     self.state.pending = Some('w');
+                    return true;
+                }
+                KeyCode::Char(',') => {
+                    self.execute_action(Action::OpenConfig).await;
+                    return true;
+                }
+                KeyCode::Char(' ') => {
+                    self.execute_action(Action::CommandPalette).await;
                     return true;
                 }
                 _ => {}
@@ -143,11 +183,42 @@ impl App {
                         return true;
                     }
                 }
+                match ch.to_ascii_lowercase() {
+                    't' => {
+                        self.execute_action(Action::NewTerminal).await;
+                        return true;
+                    }
+                    'a' => {
+                        self.execute_action(Action::ConnectAgent).await;
+                        return true;
+                    }
+                    'c' => {
+                        self.execute_action(Action::OpenConfig).await;
+                        return true;
+                    }
+                    'p' => {
+                        self.execute_action(Action::CommandPalette).await;
+                        return true;
+                    }
+                    _ => {}
+                }
             }
         }
 
         if code == KeyCode::F(1) {
             self.execute_action(Action::Help).await;
+            return true;
+        }
+        if code == KeyCode::F(2) {
+            self.execute_action(Action::ConnectAgent).await;
+            return true;
+        }
+        if code == KeyCode::F(3) {
+            self.execute_action(Action::NewTerminal).await;
+            return true;
+        }
+        if code == KeyCode::F(4) {
+            self.execute_action(Action::OpenConfig).await;
             return true;
         }
 
@@ -462,8 +533,17 @@ impl App {
                     tab == BottomTab::Terminal && !self.state.terminal.is_empty();
             }
             KeyCode::Enter | KeyCode::Char('i') => {
-                if self.state.bottom_tab == BottomTab::Terminal && !self.state.terminal.is_empty() {
-                    self.state.terminal_passthrough = true;
+                if self.state.bottom_tab == BottomTab::Terminal {
+                    if self.state.terminal.is_empty() {
+                        if let Err(error) = self.state.spawn_terminal() {
+                            self.state.set_status(
+                                format!("Terminal failed: {error}"),
+                                MessageKind::Error,
+                            );
+                        }
+                    } else {
+                        self.state.terminal_passthrough = true;
+                    }
                 }
             }
             KeyCode::Char('q') | KeyCode::Esc => self.state.focus_editor(),

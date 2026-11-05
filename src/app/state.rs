@@ -299,7 +299,7 @@ impl AppState {
         if workspace.is_empty() {
             workspace.scratch();
             notes.push(
-                "Welcome to ttui — i to insert, Ctrl+Shift+P for commands, Ctrl+P for files, F1 for help."
+                "Welcome to ttui — type to edit, Esc for normal mode, Ctrl+Shift+P for commands."
                     .to_string(),
             );
         }
@@ -347,7 +347,7 @@ impl AppState {
             keymap,
             layout,
             theme,
-            mode: EditMode::Normal,
+            mode: EditMode::Insert,
             focus: FocusTarget::Editor,
             bottom_tab: BottomTab::Terminal,
             active_modal: None,
@@ -414,7 +414,7 @@ impl AppState {
         match self.workspace.open(path) {
             Ok(_) => {
                 self.focus = FocusTarget::Editor;
-                self.mode = EditMode::Normal;
+                self.mode = EditMode::Insert;
                 self.set_status(
                     format!("Opened {}", self.workspace.display_path(path)),
                     MessageKind::Info,
@@ -490,19 +490,28 @@ impl AppState {
     }
 
     pub fn spawn_terminal(&mut self) -> Result<()> {
-        use crate::platform::shell::detect_shell;
+        use crate::platform::shell::{detect_shell, fallback_shell};
         let shell = detect_shell(self.config.terminal.shell.as_deref());
         let (rows, cols) = self.terminal_size();
-        match self
+        let mut result = self
             .terminal
-            .spawn(&shell, self.workspace.root(), rows, cols)
-        {
+            .spawn(&shell, self.workspace.root(), rows, cols);
+        if result.is_err() {
+            let fallback = fallback_shell();
+            result = self
+                .terminal
+                .spawn(&fallback, self.workspace.root(), rows, cols);
+        }
+        match result {
             Ok(_) => {
                 self.bottom_tab = BottomTab::Terminal;
                 self.layout.bottom_visible = true;
                 self.focus = FocusTarget::Bottom(BottomTab::Terminal);
                 self.terminal_passthrough = true;
-                self.set_status("Terminal started", MessageKind::Info);
+                self.set_status(
+                    "Terminal started — Ctrl+Space returns to panel navigation",
+                    MessageKind::Info,
+                );
                 Ok(())
             }
             Err(error) => {
@@ -597,6 +606,16 @@ impl AppState {
     pub fn focus_ai(&mut self) {
         self.layout.right_visible = true;
         self.focus = FocusTarget::Ai;
+    }
+
+    /// Display name of the workspace root.
+    pub fn workspace_name(&self) -> String {
+        self.workspace
+            .root()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("workspace")
+            .to_string()
     }
 
     pub fn toggle_explorer(&mut self) {
@@ -721,7 +740,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let state = AppState::bootstrap(dir.path(), None).expect("bootstrap");
         assert_eq!(state.workspace.len(), 1);
-        assert_eq!(state.mode, EditMode::Normal);
+        assert_eq!(state.mode, EditMode::Insert);
         assert_eq!(state.focus, FocusTarget::Editor);
         assert!(!state.lsp.is_configured());
         assert_eq!(state.acp.state(), crate::acp::AcpState::Disconnected);

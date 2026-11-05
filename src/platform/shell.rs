@@ -71,6 +71,27 @@ pub fn command_exists(executable: &str) -> bool {
     find_in_path(executable).is_some()
 }
 
+/// Last-resort shell used when the preferred shell cannot be spawned.
+pub fn fallback_shell() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(comspec) = std::env::var_os("COMSPEC") {
+            return PathBuf::from(comspec);
+        }
+        PathBuf::from("cmd.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        for candidate in ["/bin/sh", "/usr/bin/sh"] {
+            let path = PathBuf::from(candidate);
+            if path.is_file() {
+                return path;
+            }
+        }
+        PathBuf::from("/bin/sh")
+    }
+}
+
 /// Display name of a shell path (e.g. `/bin/zsh` -> `zsh`).
 pub fn shell_display_name(shell: &Path) -> String {
     shell

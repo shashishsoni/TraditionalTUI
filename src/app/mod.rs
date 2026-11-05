@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
-use futures::FutureExt;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
@@ -94,9 +93,6 @@ impl App {
                     match event {
                         Some(Ok(event)) => {
                             self.handle_terminal_event(event).await;
-                            while let Some(Some(Ok(next))) = events.next().now_or_never() {
-                                self.handle_terminal_event(next).await;
-                            }
                             self.dirty = true;
                         }
                         Some(Err(error)) => {

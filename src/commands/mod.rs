@@ -38,6 +38,8 @@ pub mod ids {
     pub const CLOSE_TERMINAL: &str = "terminal.close";
     pub const FOCUS_AI: &str = "ai.focus";
     pub const RELOAD_FILE: &str = "file.reload";
+    pub const CONNECT_AGENT: &str = "acp.connect";
+    pub const OPEN_CONFIG: &str = "config.open";
 }
 
 /// Declarative command description.
@@ -100,14 +102,16 @@ impl CommandRegistry {
             spec(NEXT_THEME, "Cycle Theme", "Theme", None),
             spec(GRANT_TRUST, "Trust Workspace", "Workspace", None),
             spec(REFRESH_GIT, "Refresh Git Status", "Git", None),
-            spec(
-                NEW_TERMINAL,
-                "New Terminal",
-                "Terminal",
-                Some("ctrl-shift-t"),
-            ),
+            spec(NEW_TERMINAL, "New Terminal", "Terminal", Some("ctrl-t")),
             spec(CLOSE_TERMINAL, "Close Terminal", "Terminal", None),
             spec(FOCUS_AI, "Focus AI Assistant", "AI", None),
+            spec(CONNECT_AGENT, "Connect ACP Agent", "AI", Some("ctrl-g")),
+            spec(
+                OPEN_CONFIG,
+                "Open Configuration",
+                "Application",
+                Some("ctrl-o"),
+            ),
         ];
         Self { specs }
     }

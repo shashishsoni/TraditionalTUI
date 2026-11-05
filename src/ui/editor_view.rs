@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::app::state::{AppState, FocusTarget};
+use crate::app::state::{AppState, EditMode, FocusTarget};
 use crate::editor::syntax::{HighlightState, TokenKind, highlight_line};
 use crate::editor::text::grapheme_width;
 
@@ -73,8 +73,26 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             }
         }
 
-        let line_style = if Some(line) == Some(cursor_line) {
-            Style::default().fg(theme.ui.accent)
+        if line == cursor_line {
+            buffer.set_style(
+                Rect::new(area.x, y, area.width, 1),
+                Style::default().bg(theme.ui.status_bg),
+            );
+        }
+        for gutter_x in area.x..text_x {
+            put(
+                buffer,
+                gutter_x,
+                y,
+                " ",
+                Style::default().bg(theme.ui.status_bg),
+            );
+        }
+
+        let number_style = if line == cursor_line {
+            Style::default()
+                .fg(theme.ui.accent)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.ui.dim)
         };
@@ -84,11 +102,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             if x >= text_x {
                 break;
             }
-            put(buffer, x, y, &ch.to_string(), line_style);
+            put(buffer, x, y, &ch.to_string(), number_style);
             x += 1;
         }
         while x < text_x.saturating_sub(1) {
-            put(buffer, x, y, " ", line_style);
+            put(buffer, x, y, " ", number_style);
             x += 1;
         }
         if text_x > area.x {
@@ -173,28 +191,103 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_welcome(buffer: &mut Buffer, area: Rect, state: &AppState) {
     let theme = &state.theme;
-    let lines = [
-        ("TradinationalTUI", theme.ui.accent),
-        ("", theme.ui.foreground),
-        ("i          enter insert mode", theme.ui.foreground),
-        ("Ctrl+Shift+P  command palette", theme.ui.foreground),
-        ("Ctrl+P     go to file", theme.ui.foreground),
-        ("Ctrl+J     toggle terminal", theme.ui.foreground),
-        ("Ctrl+F     search buffer", theme.ui.foreground),
-        ("F1         keymap help", theme.ui.foreground),
+    let hints: [(&str, &str); 9] = [
+        ("Ctrl+Space", "command palette"),
+        ("Ctrl+P", "go to file"),
+        ("Ctrl+T", "open terminal"),
+        ("Ctrl+Shift+F", "project search"),
+        ("Ctrl+G", "connect ACP agent"),
+        ("Ctrl+O", "open configuration"),
+        ("F1", "keymap help"),
+        ("Esc", "normal mode"),
+        ("i", "insert mode"),
     ];
-    let start_y = area.y + (area.height.saturating_sub(lines.len() as u16) / 2);
-    for (offset, (text, color)) in lines.iter().enumerate() {
-        let y = start_y + offset as u16;
+    let key_width = hints
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 3;
+    let body_width = key_width
+        + hints
+            .iter()
+            .map(|(_, description)| description.chars().count())
+            .max()
+            .unwrap_or(0);
+    let block_width = body_width.max(42).min(area.width as usize);
+    let subtitle = format!("TradinationalTUI · {}", state.workspace_name());
+    let mode_text = match state.mode {
+        EditMode::Insert => "INSERT  type to edit · Esc for normal mode",
+        _ => "NORMAL  i to insert · F1 for help",
+    };
+    let total_lines = 4 + hints.len();
+    let start_y = area.y + area.height.saturating_sub(total_lines as u16) / 2;
+
+    draw_centered(
+        buffer,
+        area,
+        start_y,
+        "ttui",
+        Style::default()
+            .fg(theme.ui.accent)
+            .add_modifier(Modifier::BOLD),
+    );
+    draw_centered(
+        buffer,
+        area,
+        start_y + 1,
+        &subtitle,
+        Style::default().fg(theme.ui.dim),
+    );
+    draw_centered(
+        buffer,
+        area,
+        start_y + 2,
+        mode_text,
+        Style::default().fg(if state.mode == EditMode::Insert {
+            theme.ui.success
+        } else {
+            theme.ui.warning
+        }),
+    );
+
+    let start_x = area.x + area.width.saturating_sub(block_width as u16) / 2;
+    let hints_y = start_y + 4;
+    for (offset, (key, description)) in hints.iter().enumerate() {
+        let y = hints_y + offset as u16;
         if y >= area.bottom() {
             break;
         }
-        let width = text.chars().count() as u16;
-        let x = area.x + area.width.saturating_sub(width) / 2;
-        let style = Style::default().fg(*color).bg(theme.ui.background);
-        for (index, ch) in text.chars().enumerate() {
-            put(buffer, x + index as u16, y, &ch.to_string(), style);
+        let key_style = Style::default()
+            .fg(theme.ui.accent)
+            .add_modifier(Modifier::BOLD);
+        let description_style = Style::default().fg(theme.ui.foreground);
+        for (index, ch) in key.chars().enumerate() {
+            put(
+                buffer,
+                start_x + index as u16,
+                y,
+                &ch.to_string(),
+                key_style,
+            );
         }
+        for (index, ch) in description.chars().enumerate() {
+            put(
+                buffer,
+                start_x + key_width as u16 + index as u16,
+                y,
+                &ch.to_string(),
+                description_style,
+            );
+        }
+    }
+}
+
+fn draw_centered(buffer: &mut Buffer, area: Rect, y: u16, text: &str, style: Style) {
+    let width = text.chars().count() as u16;
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    for (index, ch) in text.chars().enumerate() {
+        put(buffer, x + index as u16, y, &ch.to_string(), style);
     }
 }
 
@@ -247,21 +340,17 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
     let theme = &state.theme;
     let buffer = frame.buffer_mut();
     buffer.set_style(area, Style::default().bg(theme.ui.status_bg));
-    let mut x = area.x;
+    let mut x = area.x + 1;
     let active = state.workspace.active_index();
+    let reserved = 26u16;
 
     for (index, document) in state.workspace.documents().iter().enumerate() {
         let dirty = if document.dirty { " *" } else { "" };
-        let label = format!(
-            " {} {} ",
-            if Some(index) == active { "▸" } else { " " },
-            document.display_name()
-        );
-        let label = format!("{label}{dirty}");
+        let label = format!(" {}{dirty} ", document.display_name());
         let style = if Some(index) == active {
             Style::default()
-                .fg(theme.ui.tab_active)
-                .bg(theme.ui.status_bg)
+                .fg(theme.ui.cursor_fg)
+                .bg(theme.ui.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -269,15 +358,29 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(theme.ui.status_bg)
         };
         for ch in label.chars() {
-            if x >= area.right() {
+            if x >= area.right().saturating_sub(reserved) {
                 break;
             }
             put(buffer, x, area.y, &ch.to_string(), style);
             x += 1;
         }
-        if x < area.right() {
-            put(buffer, x, area.y, "│", Style::default().fg(theme.ui.border));
-            x += 1;
+        if x >= area.right().saturating_sub(reserved) {
+            break;
+        }
+    }
+
+    let hint = "F1 help · Ctrl+Space commands ";
+    let hint_width = hint.chars().count() as u16;
+    if area.width > hint_width + 4 {
+        let hint_x = area.right().saturating_sub(hint_width);
+        for (index, ch) in hint.chars().enumerate() {
+            put(
+                buffer,
+                hint_x + index as u16,
+                area.y,
+                &ch.to_string(),
+                Style::default().fg(theme.ui.dim),
+            );
         }
     }
 }

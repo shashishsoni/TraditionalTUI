@@ -36,6 +36,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     frame
         .buffer_mut()
         .set_style(inner, Style::default().bg(theme.ui.panel_bg));
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let content = Rect::new(
+        inner.x + 1,
+        inner.y,
+        inner.width.saturating_sub(2),
+        inner.height,
+    );
 
     let mut lines: Vec<Line> = Vec::new();
     let ai_status = match state.ai.state() {
@@ -46,7 +55,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     match state.ai.provider_name() {
         Some(provider) => lines.push(Line::from(vec![
-            Span::styled("BYOK ", Style::default().fg(theme.ui.dim)),
+            Span::styled("● ", Style::default().fg(theme.ui.success)),
+            Span::styled("BYOK  ", Style::default().fg(theme.ui.dim)),
             Span::styled(
                 format!("{provider} · {}", state.ai.model()),
                 Style::default().fg(theme.ui.hint),
@@ -56,15 +66,17 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 Style::default().fg(theme.ui.dim),
             ),
         ])),
-        None => lines.push(Line::from(Span::styled(
-            "BYOK AI not configured",
-            Style::default().fg(theme.ui.dim),
-        ))),
+        None => lines.push(Line::from(vec![
+            Span::styled("○ ", Style::default().fg(theme.ui.dim)),
+            Span::styled("BYOK  ", Style::default().fg(theme.ui.dim)),
+            Span::styled("not configured", Style::default().fg(theme.ui.foreground)),
+        ])),
     }
 
     if state.acp.is_connected() || state.acp.agent_name().is_some() {
         lines.push(Line::from(vec![
-            Span::styled("ACP ", Style::default().fg(theme.ui.dim)),
+            Span::styled("● ", Style::default().fg(theme.ui.success)),
+            Span::styled("ACP   ", Style::default().fg(theme.ui.dim)),
             Span::styled(
                 state.acp.agent_name().unwrap_or("agent").to_string(),
                 Style::default().fg(theme.ui.success),
@@ -75,8 +87,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             ),
         ]));
     } else {
+        lines.push(Line::from(vec![
+            Span::styled("○ ", Style::default().fg(theme.ui.dim)),
+            Span::styled("ACP   ", Style::default().fg(theme.ui.dim)),
+            Span::styled("not connected", Style::default().fg(theme.ui.foreground)),
+        ]));
+    }
+
+    if focused {
         lines.push(Line::from(Span::styled(
-            "ACP agent not connected (:acp start <id>)",
+            " i ask · a agents · x cancel · c clear",
             Style::default().fg(theme.ui.dim),
         )));
     }
@@ -84,31 +104,59 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let thread = state.ai.thread();
     if thread.is_empty() {
-        lines.push(Line::from(Span::styled(
-            " Press i to ask the assistant.",
-            Style::default().fg(theme.ui.dim),
-        )));
+        if state.ai.is_configured() {
+            lines.push(Line::from(Span::styled(
+                " Ask about the current file",
+                Style::default().fg(theme.ui.foreground),
+            )));
+            lines.push(Line::from(vec![
+                Span::styled(" i  ", Style::default().fg(theme.ui.accent)),
+                Span::styled("open the prompt", Style::default().fg(theme.ui.dim)),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                " Start an AI session",
+                Style::default()
+                    .fg(theme.ui.foreground)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(vec![
+                Span::styled("Ctrl+G ", Style::default().fg(theme.ui.accent)),
+                Span::styled("connect an ACP agent", Style::default().fg(theme.ui.dim)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Ctrl+O ", Style::default().fg(theme.ui.accent)),
+                Span::styled("open config / BYOK keys", Style::default().fg(theme.ui.dim)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(" i   ", Style::default().fg(theme.ui.accent)),
+                Span::styled("ask the assistant", Style::default().fg(theme.ui.dim)),
+            ]));
+        }
+
         if !state.acp.is_connected() {
             let agents = state.acp.available_agents();
             if agents.is_empty() {
+                lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     " No ACP agents found on PATH.",
                     Style::default().fg(theme.ui.dim),
                 )));
             } else {
+                lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    " Available ACP agents:",
+                    " Available agents",
                     Style::default().fg(theme.ui.dim),
                 )));
                 for profile in agents.iter().take(6) {
                     lines.push(Line::from(vec![
-                        Span::raw("  "),
+                        Span::styled("  · ", Style::default().fg(theme.ui.dim)),
                         Span::styled(
                             profile.name.clone(),
                             Style::default().fg(theme.ui.foreground),
                         ),
                         Span::styled(
-                            format!("  ({})", profile.id),
+                            format!("  {}", profile.id),
                             Style::default().fg(theme.ui.dim),
                         ),
                     ]));
@@ -116,7 +164,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             }
         }
     } else {
-        let width = inner.width.saturating_sub(4).max(10) as usize;
+        let width = content.width.saturating_sub(3).max(8) as usize;
         for entry in thread.entries() {
             let (label, color) = match entry.role {
                 ChatRole::User => ("You", theme.ui.accent),
@@ -143,10 +191,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         )));
     }
 
-    let height = inner.height as usize;
+    let height = content.height as usize;
     let start = lines.len().saturating_sub(height);
     let visible: Vec<Line> = lines.into_iter().skip(start).collect();
-    frame.render_widget(Paragraph::new(visible), inner);
+    frame.render_widget(Paragraph::new(visible), content);
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {

@@ -138,11 +138,16 @@ impl PtySession {
     /// Process queued output. Returns the number of bytes consumed.
     pub fn drain(&mut self) -> usize {
         let mut total = 0;
+        let mut responses = Vec::new();
         loop {
             match self.rx.try_recv() {
                 Ok(bytes) => {
                     total += bytes.len();
                     self.parser.process(&bytes);
+                    responses.extend(super::query::answers(
+                        &bytes,
+                        self.parser.screen().cursor_position(),
+                    ));
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -150,6 +155,9 @@ impl PtySession {
                     break;
                 }
             }
+        }
+        if !responses.is_empty() && self.writer.write_all(&responses).is_ok() {
+            let _ = self.writer.flush();
         }
         if self.running {
             if let Ok(Some(status)) = self.child.try_wait() {

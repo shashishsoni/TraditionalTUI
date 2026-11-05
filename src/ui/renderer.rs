@@ -80,13 +80,13 @@ mod tests {
         assert!(content.contains("fn main"));
         assert!(content.contains("AI Assistant"));
         assert!(content.contains("Terminal"));
-        assert!(content.contains("NORMAL"));
+        assert!(content.contains("INSERT"));
     }
 
     #[test]
     fn narrow_terminal_collapses_sidebars_without_panicking() {
         let content = render_content(70, 24, |_| {});
-        assert!(content.contains("NORMAL"));
+        assert!(content.contains("INSERT"));
         assert!(!content.contains("AI Assistant"));
     }
 
@@ -112,5 +112,17 @@ mod tests {
             state.command_buffer = "wq".into();
         });
         assert!(content.contains(":wq"));
+    }
+
+    #[test]
+    fn configuration_document_renders() {
+        let content = render_content(160, 50, |state| {
+            let root = state.workspace.root().to_path_buf();
+            let path = root.join("config.toml");
+            std::fs::write(&path, crate::config::CONFIG_TEMPLATE).expect("write config");
+            state.open_file(&path).expect("open config");
+        });
+        assert!(content.contains("ttui configuration"));
+        assert!(content.contains("[editor]"));
     }
 }
