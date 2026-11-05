@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(find:*)",
+      "Shell(rustc --version && cargo --version && rustup component list --installed 2>/dev/null; command -v cargo-nextest pip hyperfine || true; echo \"---\"; cargo fetch 2>&1 | tail -5)",
+      "Shell(ls -la ~/.cargo/bin 2>/dev/null | head -30; echo \"---\"; ls -d /opt/rust* /usr/local/rustup /usr/local/cargo 2>/dev/null; echo \"---\"; find / -maxdepth 4 -name cargo -type f 2>/dev/null | head)",
+      "Shell(export:*)",
+      "Shell(rustc:*)",
+      "Shell(cargo:*)",
+      "Shell(grep:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  },
+  "tasteLearning": false
+}

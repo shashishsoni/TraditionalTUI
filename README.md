@@ -1,0 +1,64 @@
+# TradinationalTUI (`ttui`)
+
+**TradinationalTUI (`ttui`)** is a lightweight, extremely fast, cross-platform Terminal User Interface (TUI) IDE written in Rust. It recreates the essential multi-panel workbench experience of VS Code directly inside your terminal emulator—with native performance, first-class **Agent Client Protocol (ACP)** support, and flexible **Bring Your Own Key (BYOK)** AI provider integration.
+
+---
+
+## Highlights
+
+- **100% Terminal-Native**: Runs inside any modern terminal emulator on **Linux**, **macOS** (`Terminal.app`, `iTerm2`, Ghostty, WezTerm), and **Windows** (`Windows Terminal`, PowerShell, CMD). Zero Electron, browser, or GUI dependencies.
+- **VS Code-Inspired 5-Zone Workbench**:
+  - **Left Sidebar**: Project File Explorer with Git status decorations.
+  - **Center Workbench**: Multi-tab, split-pane code editor powered by `ropey::Rope` UTF-8 B-trees, multi-cursor editing, Vim/Helix modal & VS Code keymap presets, and incremental `tree-sitter` syntax highlighting.
+  - **Bottom Panel**: Multiplexed PTY terminal (`portable-pty` + `vt100`), workspace `Problems` (diagnostics), `LSP` logs, and `ACP Trace` inspector.
+  - **Right Sidebar**: Optional AI Assistant & ACP Coding Agent timeline with inline permission approval cards.
+  - **Command Palette & Fuzzy Pickers**: Instant command execution (`Ctrl+Shift+P` / `:`), lock-free fuzzy file navigation (`Ctrl+P` via `nucleo`), and streaming ripgrep project search (`Ctrl+Shift+F`).
+- **First-Class Agent Client Protocol (ACP)**:
+  - Built against the official `agent-client-protocol` specification over stdio JSON-RPC 2.0.
+  - Supports native ACP agents (`opencode acp`, `command-code-acp`, `cursor-agent acp`, `gemini --acp`, `goose acp`) and official ACP adapters (`claude-agent-acp`, `codex-acp`).
+  - Interactive permission gatekeeper (`session/request_permission`) and workspace-confined `fs/*` and `terminal/*` execution.
+- **Decoupled BYOK AI Providers**:
+  - Connect your own API keys (stored securely in the OS Keyring) or local servers for OpenAI-compatible APIs, Anthropic Claude, Google Gemini, Ollama, and `llama.cpp`.
+  - **Zero-AI Ready**: Remains 100% functional with zero background overhead when no AI provider or ACP agent is configured.
+
+---
+
+## Documentation & Architecture Blueprint
+
+Before modifying or extending `ttui`, read [`AGENTS.md`](./AGENTS.md) and the full specification suite under [`docs/`](./docs/):
+
+- [`docs/PROJECT_OVERVIEW.md`](./docs/PROJECT_OVERVIEW.md) — Vision, UX layout, and core design goals.
+- [`docs/TECH_STACK.md`](./docs/TECH_STACK.md) & [`docs/DECISIONS.md`](./docs/DECISIONS.md) — Technology evaluation & ADRs (001–010).
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — 16-module architecture, event loop, and concurrency model.
+- [`docs/UI_DESIGN.md`](./docs/UI_DESIGN.md) — Workbench layout, focus management, themes, and DEC Mode 2026 rendering.
+- [`docs/EDITOR_ENGINE.md`](./docs/EDITOR_ENGINE.md) — Rope buffer, multi-cursor engine, Undo/Redo DAG, and Tree-sitter AST pipeline.
+- [`docs/ACP_INTEGRATION.md`](./docs/ACP_INTEGRATION.md) — Official ACP lifecycle, native vs. adapter matrix, and permission gatekeeper.
+- [`docs/AI_PROVIDER_ARCHITECTURE.md`](./docs/AI_PROVIDER_ARCHITECTURE.md) — BYOK provider traits, SSE streaming, and OS keyring credentials.
+- [`docs/LSP_INTEGRATION.md`](./docs/LSP_INTEGRATION.md) — Multiplexed LSP 3.17 client and UTF-8/UTF-16 position translation.
+- [`docs/TERMINAL_INTEGRATION.md`](./docs/TERMINAL_INTEGRATION.md) — Cross-platform PTY (`portable-pty`) and `vt100` emulation.
+- [`docs/CROSS_PLATFORM.md`](./docs/CROSS_PLATFORM.md) — Linux, macOS, and Windows platform rules and terminal quirks.
+- [`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md) — Quantitative latency/memory budgets and Criterion benchmarks.
+- [`docs/SECURITY.md`](./docs/SECURITY.md) — Workspace trust, ACP path confinement, and secret zeroization.
+- [`docs/TESTING.md`](./docs/TESTING.md) — Unit, property-based (`proptest`), and headless `TestBackend` snapshot testing.
+- [`docs/BUILD_AND_INSTALL.md`](./docs/BUILD_AND_INSTALL.md) — Reproducible installation commands for Linux, macOS, and Windows.
+- [`docs/ROADMAP.md`](./docs/ROADMAP.md) — Phased implementation plan (Phases 0–6).
+
+Reusable AI coding skills are located in [`.agents/skills/`](./.agents/skills/).
+
+---
+
+## Quick Start
+
+```bash
+# Verify environment and health check
+cargo run -- --check-health
+
+# Launch TradinationalTUI in the current directory
+cargo run -- .
+
+# Run full test suite, linter, and benchmark verification
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
+cargo bench --no-run
+```

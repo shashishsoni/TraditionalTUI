@@ -1,0 +1,19 @@
+# Rust / Cargo build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE & OS metadata
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Local runtime state & logs
+.ttui/state.json
+.ttui/logs/
+*.log
+
+# Criterion benchmark reports
+/target/criterion/

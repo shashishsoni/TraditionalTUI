@@ -1,0 +1,73 @@
+//! Domain actions dispatched from the keymap, palette or command line.
+
+use crate::commands::ids;
+
+/// User intent independent of the input source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Save,
+    SaveAll,
+    CloseTab,
+    Quit,
+    Help,
+    ToggleExplorer,
+    ToggleBottom,
+    ToggleAi,
+    Zoom,
+    FileFinder,
+    CommandPalette,
+    ProjectSearch,
+    BufferSearch,
+    Undo,
+    Redo,
+    SelectAll,
+    DeleteLine,
+    Copy,
+    Paste,
+    InsertMode,
+    NormalMode,
+    NextTheme,
+    GrantTrust,
+    RefreshGit,
+    NewTerminal,
+    CloseTerminal,
+    FocusAi,
+    ReloadFile,
+}
+
+impl Action {
+    /// Map a command id from the registry to an action.
+    pub fn from_command_id(id: &str) -> Option<Self> {
+        Some(match id {
+            ids::SAVE => Self::Save,
+            ids::SAVE_ALL => Self::SaveAll,
+            ids::CLOSE_TAB => Self::CloseTab,
+            ids::QUIT => Self::Quit,
+            ids::HELP => Self::Help,
+            ids::TOGGLE_EXPLORER => Self::ToggleExplorer,
+            ids::TOGGLE_BOTTOM => Self::ToggleBottom,
+            ids::TOGGLE_AI => Self::ToggleAi,
+            ids::ZOOM => Self::Zoom,
+            ids::FILE_FINDER => Self::FileFinder,
+            ids::COMMAND_PALETTE => Self::CommandPalette,
+            ids::PROJECT_SEARCH => Self::ProjectSearch,
+            ids::BUFFER_SEARCH => Self::BufferSearch,
+            ids::UNDO => Self::Undo,
+            ids::REDO => Self::Redo,
+            ids::SELECT_ALL => Self::SelectAll,
+            ids::DELETE_LINE => Self::DeleteLine,
+            ids::COPY => Self::Copy,
+            ids::PASTE => Self::Paste,
+            ids::INSERT_MODE => Self::InsertMode,
+            ids::NORMAL_MODE => Self::NormalMode,
+            ids::NEXT_THEME => Self::NextTheme,
+            ids::GRANT_TRUST => Self::GrantTrust,
+            ids::REFRESH_GIT => Self::RefreshGit,
+            ids::NEW_TERMINAL => Self::NewTerminal,
+            ids::CLOSE_TERMINAL => Self::CloseTerminal,
+            ids::FOCUS_AI => Self::FocusAi,
+            ids::RELOAD_FILE => Self::ReloadFile,
+            _ => return None,
+        })
+    }
+}

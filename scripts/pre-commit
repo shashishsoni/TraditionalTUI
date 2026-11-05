@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.cargo/bin:$PATH"
+
+echo "[ttui pre-commit] Checking formatting..."
+cargo fmt --all -- --check
+
+echo "[ttui pre-commit] Running strict Clippy lints..."
+cargo clippy --all-targets -- -D warnings
+
+echo "[ttui pre-commit] Running unit tests..."
+cargo test --lib --bins

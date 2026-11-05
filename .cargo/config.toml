@@ -1,0 +1,8 @@
+[alias]
+check-all = "check --all-targets"
+lint = "clippy --all-targets -- -D warnings"
+test-all = "test --all-targets"
+bench-check = "bench --no-run"
+
+[env]
+RUST_BACKTRACE = "1"

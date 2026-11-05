@@ -1,0 +1,92 @@
+[package]
+name = "ttui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Lightweight, cross-platform native Terminal User Interface (TUI) IDE with ACP and BYOK AI support"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[[bin]]
+name = "ttui"
+path = "src/main.rs"
+
+[lib]
+name = "ttui"
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime & concurrency
+tokio = { version = "1.43", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std", "sync", "time", "fs", "signal"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+futures = "0.3"
+async-trait = "0.1"
+bytes = "1.7"
+
+# Terminal UI & event backend
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# Text editing engine & Unicode handling
+ropey = "1.6"
+smallvec = { version = "1.13", features = ["union", "const_generics"] }
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+imara-diff = "0.1"
+
+# Fuzzy matching & workspace search
+nucleo-matcher = "0.3"
+ignore = "0.4"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+
+# Language Server Protocol (LSP) & Agent Client Protocol (ACP)
+lsp-types = "0.97"
+agent-client-protocol = { version = "5", features = ["process", "stdio"] }
+url = "2.5"
+
+# Integrated PTY terminal emulation
+portable-pty = "0.8"
+vt100 = "0.15"
+
+# BYOK AI Providers & credential security
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+eventsource-stream = "0.2"
+secrecy = { version = "0.10", features = ["serde"] }
+
+# Serialization, configuration & OS directories
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+dirs = "6.0"
+
+# Error handling, CLI & structured logging
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.6"
+tempfile = "3.15"
+
+[[bench]]
+name = "core_benchmarks"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"
